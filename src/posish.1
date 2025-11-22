@@ -1,0 +1,448 @@
+.TH POSISH 1 "2025" "posish 1.0" "User Commands"
+.SH NAME
+posish \- POSIX-compliant command language interpreter
+.SH SYNOPSIS
+.B posish
+.RB [ \-abCefhimnuvx ]
+.RB [ \-o
+.IR option ]
+.RB [ \-c
+.I command_string
+.RI [ command_name
+.RI [ argument \fR...]]]
+.br
+.B posish
+.RB [ \-abCefhimnuvx ]
+.RB [ \-o
+.IR option ]
+.RB [ \-s ]
+.RI [ argument \fR...]
+.br
+.B posish
+.RB [ \-abCefhimnuvx ]
+.RB [ \-o
+.IR option ]
+.I script_file
+.RI [ argument \fR...]
+.SH DESCRIPTION
+.B posish
+is a POSIX-compliant command language interpreter (shell) that executes commands read from a command line string, the standard input, or a specified file.
+.PP
+The shell implements the POSIX shell command language as specified in IEEE Std 1003.1-2017, providing a robust environment for executing shell scripts and interactive command-line operations.
+.SH OPTIONS
+.TP
+.B \-c
+Read commands from the
+.I command_string
+operand. The following argument becomes the special parameter
+.B $0
+and remaining arguments become positional parameters.
+.TP
+.B \-i
+Force interactive mode. The shell is considered interactive and will source the
+.B ENV
+file and maintain command history.
+.TP
+.B \-s
+Read commands from standard input. This is the default when no arguments are provided.
+.TP
+.B \-x
+Enable trace mode. Each command is printed to standard error (prefixed by
+.BR PS4 )
+before execution.
+.TP
+.B \-e
+Exit immediately if a command exits with non-zero status.
+.TP
+.B \-f
+Disable pathname expansion (globbing).
+.TP
+.B \-v
+Verbose mode. Print shell input lines as they are read.
+.TP
+.B \-n
+Read commands but do not execute them (syntax checking).
+.TP
+.B \-u
+Treat unset variables as an error.
+.TP
+.B \-a
+Export all variables that are modified or created.
+.TP
+.B \-m
+Enable job control (monitor mode).
+.TP
+.B \-b
+Notify of job completion immediately.
+.TP
+.B \-C
+Prevent output redirection from overwriting existing files.
+.TP
+.B \-h
+Locate and remember commands as they are defined.
+.TP
+.BI \-o " option"
+Set named option. See
+.B set
+builtin for available options.
+.TP
+.B \-\-
+Terminate option processing. Remaining arguments are treated as operands.
+.SH BUILTINS
+The following builtin commands are provided:
+.TP
+.B :
+Null command. Returns exit status 0.
+.TP
+.B alias
+Define or display command aliases.
+.TP
+.B bg
+Resume suspended jobs in the background.
+.TP
+.B break
+Exit from a for, while, or until loop.
+.TP
+.B cd
+Change the current working directory.
+.TP
+.B command
+Execute a command bypassing shell function lookup.
+.TP
+.B continue
+Resume the next iteration of a loop.
+.TP
+.B echo
+Write arguments to standard output.
+.TP
+.B eval
+Evaluate arguments as a shell command.
+.TP
+.B exec
+Replace the shell with the specified command.
+.TP
+.B exit
+Exit the shell with optional status code.
+.TP
+.B export
+Mark variables for export to child processes.
+.TP
+.B fg
+Bring jobs to the foreground.
+.TP
+.B getopts
+Parse command options.
+.TP
+.B jobs
+List active jobs.
+.TP
+.B kill
+Send signals to processes or jobs.
+.TP
+.B local
+Create local variables in functions.
+.TP
+.B printf
+Format and print data.
+.TP
+.B pwd
+Print the current working directory.
+.TP
+.B read
+Read a line from standard input.
+.TP
+.B readonly
+Mark variables as read-only.
+.TP
+.B return
+Return from a shell function.
+.TP
+.B set
+Set or unset shell options and positional parameters.
+.TP
+.B shift
+Shift positional parameters.
+.TP
+.B test
+Evaluate conditional expressions.
+.TP
+.B [
+Synonym for
+.BR test .
+.TP
+.B times
+Print accumulated process times.
+.TP
+.B trap
+Set signal handlers.
+.TP
+.B type
+Display command type information.
+.TP
+.B typeset
+Declare variables with attributes.
+.TP
+.B umask
+Set file creation mask.
+.TP
+.B unalias
+Remove alias definitions.
+.TP
+.B unset
+Unset variables or functions.
+.TP
+.B wait
+Wait for job completion.
+.SH SPECIAL PARAMETERS
+.TP
+.B $?
+Exit status of the last command.
+.TP
+.B $$
+Process ID of the shell.
+.TP
+.B $!
+Process ID of the last background command.
+.TP
+.B $0
+Name of the shell or shell script.
+.TP
+.B $1, $2, ...
+Positional parameters.
+.TP
+.B $#
+Number of positional parameters.
+.TP
+.B $@
+All positional parameters as separate words.
+.TP
+.B $*
+All positional parameters as a single word.
+.TP
+.B $\-
+Current shell option flags.
+.SH ENVIRONMENT
+.TP
+.B ENV
+Path to startup file for interactive non-login shells. The file is sourced after shell initialization.
+.TP
+.B HOME
+User's home directory. Used for tilde expansion and as default argument to
+.BR cd .
+.TP
+.B IFS
+Internal Field Separator. Used for word splitting. Default is space, tab, and newline.
+.TP
+.B OLDPWD
+Previous working directory. Set by
+.BR cd .
+.TP
+.B OPTARG
+Argument value for options parsed by
+.BR getopts .
+.TP
+.B OPTIND
+Index of next argument to be processed by
+.BR getopts .
+.TP
+.B PATH
+Colon-separated list of directories to search for commands.
+.TP
+.B PPID
+Process ID of the shell's parent process.
+.TP
+.B PS1
+Primary prompt string. Default is "$ ".
+.TP
+.B PS2
+Secondary prompt for line continuation (not yet implemented).
+.TP
+.B PS4
+Trace prompt prefix for
+.B set \-x
+mode. Default is "+ ".
+.TP
+.B PWD
+Current working directory.
+.SH FILES
+.TP
+.I /etc/profile
+System-wide initialization file for login shells.
+.TP
+.I ~/.profile
+Personal initialization file for login shells.
+.TP
+.I ~/.sh_history
+Command history file for interactive shells.
+.SH FEATURES
+.SS "Command Execution"
+Commands are executed by searching directories in
+.BR PATH .
+Shell functions and builtin commands take precedence over external commands.
+.SS "Word Expansions"
+The following expansions are performed in order:
+.RS
+.IP \(bu 2
+Tilde expansion (~)
+.IP \(bu
+Parameter expansion ($VAR, ${VAR})
+.IP \(bu
+Command substitution ($(command), `command`)
+.IP \(bu
+Arithmetic expansion ($((expression)))
+.IP \(bu
+Pathname expansion (globbing: *, ?, [...])
+.IP \(bu
+Field splitting (using IFS)
+.RE
+.SS "Parameter Expansion"
+.RS
+.IP ${VAR:-word} 15
+Use default value if VAR is unset or null.
+.IP ${VAR:=word}
+Assign default value if VAR is unset or null.
+.IP ${VAR:?message}
+Display error if VAR is unset or null.
+.IP ${VAR:+word}
+Use alternative value if VAR is set and not null.
+.IP ${VAR#pattern}
+Remove shortest prefix matching pattern.
+.IP ${VAR##pattern}
+Remove longest prefix matching pattern.
+.IP ${VAR%pattern}
+Remove shortest suffix matching pattern.
+.IP ${VAR%%pattern}
+Remove longest suffix matching pattern.
+.RE
+.SS "Redirections"
+.TP
+.B >file
+Redirect standard output to file.
+.TP
+.B >>file
+Append standard output to file.
+.TP
+.B <file
+Redirect standard input from file.
+.TP
+.B 2>file
+Redirect standard error to file.
+.TP
+.B 2>&1
+Redirect standard error to standard output.
+.TP
+.B <<EOF
+Here-document. Read input until EOF marker.
+.TP
+.B <<\-EOF
+Here-document with leading tabs stripped.
+.SS "Control Structures"
+.TP
+.B if...then...elif...else...fi
+Conditional execution.
+.TP
+.B while...do...done
+Loop while condition is true.
+.TP
+.B until...do...done
+Loop until condition is true.
+.TP
+.B for var in list...do...done
+Iterate over list.
+.TP
+.B case...in...esac
+Pattern matching selection.
+.SS "Operators"
+.TP
+.B ;
+Command separator (sequential execution).
+.TP
+.B &
+Background execution.
+.TP
+.B &&
+AND operator (execute if previous succeeds).
+.TP
+.B ||
+OR operator (execute if previous fails).
+.TP
+.B |
+Pipeline (connect stdout to stdin).
+.SH INTERACTIVE FEATURES
+.TP
+.B Command History
+Commands are saved to ~/.sh_history. Navigate with Up/Down arrow keys.
+.TP
+.B Line Editing
+Basic line editing with arrow keys (left/right for cursor movement).
+.TP
+.B Job Control
+Background jobs, job suspension (Ctrl+Z), and job management.
+.TP
+.B Signal Handling
+Customizable signal handlers via
+.BR trap .
+.SH EXIT STATUS
+The exit status of
+.B posish
+is the exit status of the last command executed. If no commands were executed, the exit status is 0.
+On syntax errors or invalid options, the exit status is 2.
+If a script file cannot be found, the exit status is 127.
+.SH EXAMPLES
+.PP
+Execute a command string:
+.RS
+.nf
+posish \-c 'echo Hello, World!'
+.fi
+.RE
+.PP
+Run a shell script with arguments:
+.RS
+.nf
+posish script.sh arg1 arg2
+.fi
+.RE
+.PP
+Enable trace mode for debugging:
+.RS
+.nf
+posish \-x script.sh
+.fi
+.RE
+.PP
+Interactive shell with custom prompt:
+.RS
+.nf
+PS1='myprompt> ' posish
+.fi
+.RE
+.SH CONFORMING TO
+IEEE Std 1003.1-2017 (POSIX.1-2017)
+.SH KNOWN LIMITATIONS
+.IP \(bu 2
+.B LINENO
+special variable is not implemented.
+.IP \(bu
+.B PS2
+continuation prompt is not implemented (requires incomplete command detection).
+.IP \(bu
+Some
+.B set
+options are accepted but not fully implemented (-e, -f, -v, -n, -u, -a, -m, -b, -C, -h).
+.SH AUTHORS
+.PP
+Copyright \(co 2025 xaonfc (Mario)
+.br
+Licensed under the GNU General Public License version 2 or later (GPL-2.0-or-later).
+.br
+This is free software: you are free to change and redistribute it.
+.br
+There is NO WARRANTY, to the extent permitted by law.
+.SH SEE ALSO
+.BR sh (1),
+.BR bash (1),
+.BR dash (1),
+.BR ksh (1)
+.PP
+Full POSIX shell specification: IEEE Std 1003.1-2017, Shell Command Language

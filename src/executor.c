@@ -1,0 +1,1617 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+
+
+#include "executor.h"
+#include "memalloc.h"
+#include "builtins.h"
+#include "error.h"
+#include "variables.h"
+#include "jobs.h"
+#include "lexer.h"
+#include "shell_options.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/wait.h>
+#include <ctype.h>
+#include <string.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <fnmatch.h>
+#include <glob.h>
+#include <pwd.h>
+#include "functions.h"
+
+extern char **environ;
+
+static int last_exit_status = 0;
+int func_return_status = 0;
+int executor_break_count = 0;
+int executor_continue_count = 0;
+
+#include "signals.h"
+
+int executor_get_last_status(void) {
+    return last_exit_status;
+}
+
+void executor_set_last_status(int status) {
+    last_exit_status = status;
+}
+
+// Helper to find executable in PATH
+char *find_executable(const char *command) {
+    if (strchr(command, '/')) {
+        return xstrdup(command);
+    }
+
+    const char *path_env = getenv("PATH");
+    if (!path_env) return NULL;
+
+    char *path_copy = xstrdup(path_env);
+    char *dir = strtok(path_copy, ":");
+    char *result = NULL;
+
+    while (dir) {
+        size_t len = strlen(dir) + strlen(command) + 2;
+        char *full_path = xmalloc(len);
+        snprintf(full_path, len, "%s/%s", dir, command);
+
+        if (access(full_path, X_OK) == 0) {
+            result = full_path;
+            break;
+        }
+
+        free(full_path);
+        dir = strtok(NULL, ":");
+    }
+
+    free(path_copy);
+    return result;
+}
+
+static int handle_redirections(Redirection *redirs, size_t count) {
+    for (size_t i = 0; i < count; i++) {
+        Redirection *r = &redirs[i];
+        int fd = -1;
+        int flags = 0;
+        int mode = 0666;
+        
+        if (r->type == REDIR_IN) {
+            fd = open(r->filename, O_RDONLY);
+            if (fd < 0) {
+                error_sys("open: %s", r->filename);
+                return 1;
+            }
+            if (dup2(fd, r->io_number) < 0) {
+                error_sys("dup2");
+                close(fd);
+                return 1;
+            }
+            close(fd);
+        } else if (r->type == REDIR_OUT || r->type == REDIR_OUT_CLOBBER) {
+            flags = O_WRONLY | O_CREAT | O_TRUNC;
+            fd = open(r->filename, flags, mode);
+            if (fd < 0) {
+                error_sys("open: %s", r->filename);
+                return 1;
+            }
+            if (dup2(fd, r->io_number) < 0) {
+                error_sys("dup2");
+                close(fd);
+                return 1;
+            }
+            close(fd);
+        } else if (r->type == REDIR_APPEND) {
+            flags = O_WRONLY | O_CREAT | O_APPEND;
+            fd = open(r->filename, flags, mode);
+            if (fd < 0) {
+                error_sys("open: %s", r->filename);
+                return 1;
+            }
+            if (dup2(fd, r->io_number) < 0) {
+                error_sys("dup2");
+                close(fd);
+                return 1;
+            }
+            close(fd);
+        } else if (r->type == REDIR_IN_DUP || r->type == REDIR_OUT_DUP) {
+            int target_fd = atoi(r->filename);
+            if (dup2(target_fd, r->io_number) < 0) {
+                error_sys("dup2");
+                return 1;
+            }
+        } else if (r->type == REDIR_RDWR) {
+            flags = O_RDWR | O_CREAT;
+            fd = open(r->filename, flags, mode);
+            if (fd < 0) {
+                error_sys("open: %s", r->filename);
+                return 1;
+            }
+            if (dup2(fd, r->io_number) < 0) {
+                error_sys("dup2");
+                close(fd);
+                return 1;
+            }
+            close(fd);
+        } else if (r->type == REDIR_HEREDOC || r->type == REDIR_HEREDOC_DASH) {
+            char template[] = "/tmp/posish_heredoc_XXXXXX";
+            int fd = mkstemp(template);
+            if (fd < 0) {
+                error_sys("mkstemp");
+                return 1;
+            }
+            unlink(template);
+            
+            if (r->here_doc_content) {
+                ssize_t written = write(fd, r->here_doc_content, strlen(r->here_doc_content));
+                (void)written; // Ignore errors in here-doc write for now
+            }
+            lseek(fd, 0, SEEK_SET);
+            
+            if (dup2(fd, STDIN_FILENO) < 0) {
+                error_sys("dup2");
+                close(fd);
+                return 1;
+            }
+            close(fd);
+        }
+    }
+    return 0;
+}
+
+#include "parser.h"
+
+static char *execute_subshell_capture(const char *cmd_str) {
+    int pipefd[2];
+    if (pipe(pipefd) < 0) {
+        error_sys("pipe");
+        return xstrdup("");
+    }
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        close(pipefd[0]);
+        dup2(pipefd[1], STDOUT_FILENO);
+        close(pipefd[1]);
+        
+        Lexer lexer;
+        lexer_init(&lexer, cmd_str);
+        ASTNode *node = parser_parse(&lexer);
+        
+        int status = executor_execute(node);
+        ast_free(node);
+        exit(status);
+    } else if (pid < 0) {
+        error_sys("fork");
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return xstrdup("");
+    }
+
+    close(pipefd[1]);
+    
+    size_t size = 0;
+    size_t capacity = 128;
+    char *buffer = xmalloc(capacity);
+    
+    ssize_t n;
+    while ((n = read(pipefd[0], buffer + size, capacity - size - 1)) > 0) {
+        size += n;
+        if (size >= capacity - 1) {
+            capacity *= 2;
+            buffer = xrealloc(buffer, capacity);
+        }
+    }
+    close(pipefd[0]);
+    buffer[size] = '\0';
+    
+    waitpid(pid, NULL, 0);
+    
+    while (size > 0 && buffer[size - 1] == '\n') {
+        buffer[--size] = '\0';
+    }
+    
+    return buffer;
+}
+
+static char *expand_tilde(const char *word) {
+    if (word[0] != '~') {
+        return xstrdup(word);
+    }
+
+    const char *slash = strchr(word, '/');
+    size_t prefix_len = slash ? (size_t)(slash - word) : strlen(word);
+    
+    char *home = NULL;
+    
+    if (prefix_len == 1) {
+        home = getenv("HOME");
+        if (!home) {
+            struct passwd *pw = getpwuid(getuid());
+            if (pw) home = pw->pw_dir;
+        }
+    } else {
+        char *username = xmalloc(prefix_len);
+        strncpy(username, word + 1, prefix_len - 1);
+        username[prefix_len - 1] = '\0';
+        
+        struct passwd *pw = getpwnam(username);
+        if (pw) {
+            home = pw->pw_dir;
+        }
+        free(username);
+    }
+    
+    if (home) {
+        size_t home_len = strlen(home);
+        size_t suffix_len = slash ? strlen(slash) : 0;
+        char *result = xmalloc(home_len + suffix_len + 1);
+        strcpy(result, home);
+        if (slash) strcat(result, slash);
+        return result;
+    }
+    
+    return xstrdup(word);
+}
+
+static long eval_expression(const char **str);
+
+// Pattern removal functions
+static char *remove_suffix_shortest(const char *str, const char *pattern);
+static char *remove_suffix_longest(const char *str, const char *pattern);
+static char *remove_prefix_shortest(const char *str, const char *pattern);
+static char *remove_prefix_longest(const char *str, const char *pattern);
+
+static long eval_factor(const char **str) {
+    while (isspace(**str)) (*str)++;
+    
+    if (**str == '(') {
+        (*str)++;
+        long val = eval_expression(str);
+        while (isspace(**str)) (*str)++;
+        if (**str == ')') (*str)++;
+        return val;
+    } else if (isalpha(**str) || **str == '_') {
+        const char *start = *str;
+        while (isalnum(**str) || **str == '_') (*str)++;
+        size_t len = *str - start;
+        char *name = xmalloc(len + 1);
+        strncpy(name, start, len);
+        name[len] = '\0';
+        
+        char *val_str = var_get(name);
+        long val = 0;
+        if (val_str) {
+            val = strtol(val_str, NULL, 10);
+            free(val_str);
+        }
+        free(name);
+        return val;
+    } else if (isdigit(**str) || **str == '-' || **str == '+') {
+        char *end;
+        long val = strtol(*str, &end, 10);
+        *str = end;
+        return val;
+    }
+    return 0;
+}
+
+static long eval_term(const char **str) {
+    long val = eval_factor(str);
+    while (1) {
+        while (isspace(**str)) (*str)++;
+        if (**str == '*') {
+            (*str)++;
+            val *= eval_factor(str);
+        } else if (**str == '/') {
+            (*str)++;
+            long divisor = eval_factor(str);
+            if (divisor == 0) {
+                error_msg("division by 0");
+                exit(1);
+            }
+            val /= divisor;
+        } else {
+            break;
+        }
+    }
+    return val;
+}
+
+static long eval_expression(const char **str) {
+    long val = eval_term(str);
+    while (1) {
+        while (isspace(**str)) (*str)++;
+        if (**str == '+') {
+            (*str)++;
+            val += eval_term(str);
+        } else if (**str == '-') {
+            (*str)++;
+            val -= eval_term(str);
+        } else {
+            break;
+        }
+    }
+    return val;
+}
+
+static long evaluate_arithmetic(const char *expr) {
+    const char *ptr = expr;
+    return eval_expression(&ptr);
+}
+
+static int is_ifs(char c, const char *ifs) {
+    if (!ifs) {
+        return c == ' ' || c == '\t' || c == '\n';
+    }
+    return strchr(ifs, c) != NULL;
+}
+
+static int is_ifs_whitespace(char c, const char *ifs) {
+    if (!ifs) {
+        return c == ' ' || c == '\t' || c == '\n';
+    }
+    return strchr(ifs, c) && isspace((unsigned char)c);
+}
+
+// StringBuilder for efficient string construction
+typedef struct {
+    char *data;
+    size_t len;
+    size_t cap;
+} StringBuilder;
+
+static void sb_init(StringBuilder *sb) {
+    sb->cap = 64;
+    sb->data = xmalloc(sb->cap);
+    sb->len = 0;
+    sb->data[0] = '\0';
+}
+
+static void sb_append(StringBuilder *sb, char c) {
+    if (sb->len + 1 >= sb->cap) {
+        sb->cap *= 2;
+        sb->data = xrealloc(sb->data, sb->cap);
+    }
+    sb->data[sb->len++] = c;
+    sb->data[sb->len] = '\0';
+}
+
+static void sb_append_str(StringBuilder *sb, const char *s) {
+    size_t slen = strlen(s);
+    if (sb->len + slen + 1 >= sb->cap) {
+        while (sb->len + slen + 1 >= sb->cap) {
+            sb->cap *= 2;
+        }
+        sb->data = xrealloc(sb->data, sb->cap);
+    }
+    strcpy(sb->data + sb->len, s);
+    sb->len += slen;
+}
+
+static char *sb_finish(StringBuilder *sb) {
+    return sb->data; // Transfer ownership
+}
+
+
+
+char *expand_word(const char *word);
+
+static char **expand_word_internal(const char *word, int allow_split) {
+    if (!word) return NULL;
+    
+    char *tilde_expanded = expand_tilde(word);
+    size_t len = strlen(tilde_expanded);
+    
+    char **results = NULL;
+    size_t result_count = 0;
+    
+    StringBuilder sb;
+    sb_init(&sb);
+    
+    size_t i = 0;
+    const char *input = tilde_expanded;
+    
+    char *ifs_val = var_get("IFS");
+    char *ifs = ifs_val;
+    
+    int in_quote = 0;
+    int push_empty_at_end = !allow_split;
+
+    // Skip leading IFS whitespace if splitting (for the word itself)
+    if (allow_split) {
+        while (i < len && is_ifs_whitespace(input[i], ifs)) i++;
+    }
+    
+    while (i < len) {
+        if (input[i] == '\\') {
+            push_empty_at_end = 1;
+            if (i + 1 < len) {
+                if (in_quote == 2) {
+                    char next = input[i+1];
+                    if (next == '$' || next == '`' || next == '"' || next == '\\' || next == '\n') {
+                        sb_append(&sb, next);
+                        i += 2;
+                    } else {
+                        sb_append(&sb, '\\');
+                        sb_append(&sb, next);
+                        i += 2;
+                    }
+                } else {
+                    sb_append(&sb, input[i+1]);
+                    i += 2;
+                }
+            } else {
+                sb_append(&sb, '\\');
+                i++;
+            }
+        } else if (input[i] == '\'') {
+            push_empty_at_end = 1;
+            if (in_quote == 0) {
+                i++;
+                while (i < len && input[i] != '\'') {
+                    sb_append(&sb, input[i++]);
+                }
+                if (i < len) i++;
+            } else {
+                sb_append(&sb, input[i++]);
+            }
+        } else if (input[i] == '"') {
+            push_empty_at_end = 1;
+            if (in_quote == 0) {
+                in_quote = 2;
+                i++;
+            } else if (in_quote == 2) {
+                in_quote = 0;
+                i++;
+            } else {
+                sb_append(&sb, input[i++]);
+            }
+        } else if (input[i] == '$') {
+            push_empty_at_end = 1;
+            if (i + 1 < len && input[i+1] == '(' && i + 2 < len && input[i+2] == '(') {
+                // Arithmetic $((...))
+                i += 3; // Skip $((
+                size_t start = i;
+                
+                int nesting = 0;
+                while (i + 1 < len) {
+                    if (input[i] == '(') nesting++;
+                    else if (input[i] == ')') {
+                        if (nesting > 0) nesting--;
+                        else {
+                            // Found first closing paren of `))`.
+                            if (input[i+1] == ')') {
+                                break;
+                            }
+                        }
+                    }
+                    i++;
+                }
+                
+                if (i + 1 < len && input[i] == ')' && input[i+1] == ')') {
+                    size_t expr_len = i - start;
+                    char *expr = xmalloc(expr_len + 1);
+                    strncpy(expr, input + start, expr_len);
+                    expr[expr_len] = '\0';
+                    
+                    char *expanded_expr = expand_word(expr);
+                    long val = evaluate_arithmetic(expanded_expr);
+                    free(expr);
+                    free(expanded_expr);
+                    char val_str[32];
+                    snprintf(val_str, sizeof(val_str), "%ld", val);
+                    
+                    if (allow_split && in_quote == 0) {
+                        const char *p = val_str;
+                        while (*p) {
+                            if (is_ifs(*p, ifs)) {
+                                if (is_ifs_whitespace(*p, ifs) && result_count == 0 && sb.len == 0) {
+                                     p++;
+                                     while (*p && is_ifs_whitespace(*p, ifs)) p++;
+                                     continue;
+                                }
+                                
+                                results = xrealloc(results, (result_count + 2) * sizeof(char *));
+                                results[result_count++] = sb_finish(&sb);
+                                sb_init(&sb);
+                                
+                                if (is_ifs_whitespace(*p, ifs)) {
+                                    while (*p && is_ifs_whitespace(*p, ifs)) p++;
+                                    if (*p && is_ifs(*p, ifs) && !is_ifs_whitespace(*p, ifs)) {
+                                        p++;
+                                        while (*p && is_ifs_whitespace(*p, ifs)) p++;
+                                    }
+                                    push_empty_at_end = 0;
+                                } else {
+                                    p++;
+                                    while (*p && is_ifs_whitespace(*p, ifs)) p++;
+                                    push_empty_at_end = 1;
+                                }
+                            } else {
+                                sb_append(&sb, *p++);
+                                push_empty_at_end = 1;
+                            }
+                        }
+                    } else {
+                        sb_append_str(&sb, val_str);
+                    }
+                    i += 2; // Skip `))`
+                } else {
+                    // Error: missing ))
+                    i++;
+                }
+            } else if (i + 1 < len && input[i+1] == '(') {
+                i += 2;
+                size_t start = i;
+                int nesting = 1;
+                while (i < len && nesting > 0) {
+                    if (input[i] == '(') nesting++;
+                    else if (input[i] == ')') nesting--;
+                    i++;
+                }
+                if (nesting == 0) {
+                    size_t cmd_len = i - 1 - start;
+                    char *cmd = xmalloc(cmd_len + 1);
+                    strncpy(cmd, input + start, cmd_len);
+                    cmd[cmd_len] = '\0';
+                    char *output = execute_subshell_capture(cmd);
+                    
+                    if (allow_split && in_quote == 0) {
+                         const char *p = output;
+                        while (*p) {
+                            if (is_ifs(*p, ifs)) {
+                                if (is_ifs_whitespace(*p, ifs) && result_count == 0 && sb.len == 0) {
+                                     p++;
+                                     while (*p && is_ifs_whitespace(*p, ifs)) p++;
+                                     continue;
+                                }
+
+                                results = xrealloc(results, (result_count + 2) * sizeof(char *));
+                                results[result_count++] = sb_finish(&sb);
+                                sb_init(&sb);
+                                
+                                if (is_ifs_whitespace(*p, ifs)) {
+                                    while (*p && is_ifs_whitespace(*p, ifs)) p++;
+                                    if (*p && is_ifs(*p, ifs) && !is_ifs_whitespace(*p, ifs)) {
+                                        p++;
+                                        while (*p && is_ifs_whitespace(*p, ifs)) p++;
+                                    }
+                                    push_empty_at_end = 0;
+                                } else {
+                                    p++;
+                                    while (*p && is_ifs_whitespace(*p, ifs)) p++;
+                                    push_empty_at_end = 1;
+                                }
+                            } else {
+                                sb_append(&sb, *p++);
+                                push_empty_at_end = 1;
+                            }
+                        }
+                    } else {
+                        sb_append_str(&sb, output);
+                    }
+                    free(cmd);
+                    free(output);
+                }
+            } else {
+                i++; 
+                char *var_name = NULL;
+                size_t var_len = 0;
+                
+                if (i < len && input[i] == '{') {
+                    i++;
+                    size_t start = i;
+                    
+                    // Find the variable name and operator
+                    while (i < len && input[i] != '}' && input[i] != ':' && input[i] != '%' && input[i] != '#') {
+                        i++;
+                    }
+                    
+                    var_len = i - start;
+                    var_name = xmalloc(var_len + 1);
+                    strncpy(var_name, input + start, var_len);
+                    var_name[var_len] = '\0';
+                    
+                    // Check for pattern removal operators
+                    char *pattern = NULL;
+                    int pattern_op = 0; // 0=none, 1=%, 2=%%, 3=#, 4=##
+                    
+                    if (i < len && (input[i] == '%' || input[i] == '#')) {
+                        char op_char = input[i];
+                        i++;
+                        
+                        // Check for double operator (%% or ##)
+                        if (i < len && input[i] == op_char) {
+                            pattern_op = (op_char == '%') ? 2 : 4;
+                            i++;
+                        } else {
+                            pattern_op = (op_char == '%') ? 1 : 3;
+                        }
+                        
+                        // Get the pattern
+                        size_t pat_start = i;
+                        while (i < len && input[i] != '}') i++;
+                        size_t pat_len = i - pat_start;
+                        pattern = xmalloc(pat_len + 1);
+                        strncpy(pattern, input + pat_start, pat_len);
+                        pattern[pat_len] = '\0';
+                    } else {
+                        // No pattern operator, skip to }
+                        while (i < len && input[i] != '}') i++;
+                    }
+                    
+                    if (i < len) i++; // Skip '}'
+                    
+                    // Get variable value
+                    char *var_value = NULL;
+                    if (strcmp(var_name, "?") == 0) {
+                        char buf[32]; snprintf(buf, sizeof(buf), "%d", executor_get_last_status());
+                        var_value = xstrdup(buf);
+                    } else if (strcmp(var_name, "$") == 0) {
+                        char buf[32]; snprintf(buf, sizeof(buf), "%d", getpid());
+                        var_value = xstrdup(buf);
+                    } else if (strcmp(var_name, "-") == 0) {
+                        // Shell flags - for now just return basic flags
+                        // i = interactive, m = monitor (job control)
+                        var_value = xstrdup("im");
+                    } else if (isdigit(var_name[0])) {
+                        var_value = var_get_positional(atoi(var_name));
+                        if (!var_value) var_value = xstrdup("");
+                    } else {
+                        var_value = var_get(var_name);
+                        if (!var_value) var_value = xstrdup("");
+                    }
+                    
+                    // Apply pattern removal if needed
+                    if (pattern_op && var_value) {
+                        char *result = NULL;
+                        switch (pattern_op) {
+                            case 1: // % - remove shortest suffix
+                                result = remove_suffix_shortest(var_value, pattern);
+                                break;
+                            case 2: // %% - remove longest suffix
+                                result = remove_suffix_longest(var_value, pattern);
+                                break;
+                            case 3: // # - remove shortest prefix
+                                result = remove_prefix_shortest(var_value, pattern);
+                                break;
+                            case 4: // ## - remove longest prefix
+                                result = remove_prefix_longest(var_value, pattern);
+                                break;
+                        }
+                        if (result) {
+                            free(var_value);
+                            var_value = result;
+                        }
+                    }
+                    
+                    if (var_value) {
+                        sb_append_str(&sb, var_value);
+                        free(var_value);
+                    }
+                    if (pattern) free(pattern);
+                    free(var_name);
+                    var_name = NULL;
+                    continue;
+                } else {
+                    size_t start = i;
+                    if (i < len && (input[i] == '?' || input[i] == '$' || input[i] == '#' || input[i] == '!' || input[i] == '@' || input[i] == '*' || input[i] == '-' || isdigit(input[i]))) {
+                        i++;
+                    } else {
+                        while (i < len && (isalnum(input[i]) || input[i] == '_')) i++;
+                    }
+                    var_len = i - start;
+                    var_name = xmalloc(var_len + 1);
+                    strncpy(var_name, input + start, var_len);
+                    var_name[var_len] = '\0';
+                }
+                
+                if (var_name) {
+                    char *val = NULL;
+                    int free_val = 0;
+                    
+                    if (strcmp(var_name, "?") == 0) {
+                        char buf[32]; snprintf(buf, sizeof(buf), "%d", executor_get_last_status());
+                        val = xstrdup(buf); free_val = 1;
+                    } else if (strcmp(var_name, "$") == 0) {
+                        char buf[32]; snprintf(buf, sizeof(buf), "%d", getpid());
+                        val = xstrdup(buf); free_val = 1;
+                    } else if (strcmp(var_name, "-") == 0) {
+                        val = xstrdup("im"); free_val = 1;
+                    } else if (strcmp(var_name, "#") == 0) {
+                        char buf[32]; snprintf(buf, sizeof(buf), "%d", var_get_positional_count());
+                        val = xstrdup(buf); free_val = 1;
+                    } else if (strcmp(var_name, "!") == 0) {
+                        pid_t bg_pid = var_get_last_bg_pid();
+                        char buf[32]; if (bg_pid > 0) snprintf(buf, sizeof(buf), "%d", bg_pid); else buf[0] = '\0';
+                        val = xstrdup(buf); free_val = 1;
+                    } else if (strcmp(var_name, "@") == 0 || strcmp(var_name, "*") == 0) {
+                        char **args = var_get_all_positional();
+                        if (args) {
+                            size_t total_len = 0;
+                            for (int k = 0; args[k]; k++) total_len += strlen(args[k]) + 1;
+                            val = xmalloc(total_len + 1); val[0] = '\0';
+                            for (int k = 0; args[k]; k++) {
+                                strcat(val, args[k]);
+                                if (args[k+1]) strcat(val, " ");
+                                free(args[k]);
+                            }
+                            free(args);
+                        } else { val = xstrdup(""); }
+                        free_val = 1;
+                    } else if (isdigit(var_name[0])) {
+                        val = var_get_positional(atoi(var_name));
+                        if (!val) val = xstrdup("");
+                        free_val = 1;
+                    } else {
+                        val = var_get(var_name);
+                        if (val) free_val = 1;
+                    }
+                    
+                    if (val) {
+                        if (allow_split && in_quote == 0) {
+                            const char *p = val;
+                            while (*p) {
+                                if (is_ifs(*p, ifs)) {
+                                    if (is_ifs_whitespace(*p, ifs) && result_count == 0 && sb.len == 0) {
+                                         p++;
+                                         while (*p && is_ifs_whitespace(*p, ifs)) p++;
+                                         continue;
+                                    }
+
+                                    results = xrealloc(results, (result_count + 2) * sizeof(char *));
+                                    results[result_count++] = sb_finish(&sb);
+                                    sb_init(&sb);
+                                    
+                                    if (is_ifs_whitespace(*p, ifs)) {
+                                        while (*p && is_ifs_whitespace(*p, ifs)) p++;
+                                        if (*p && is_ifs(*p, ifs) && !is_ifs_whitespace(*p, ifs)) {
+                                            p++;
+                                            while (*p && is_ifs_whitespace(*p, ifs)) p++;
+                                        }
+                                        push_empty_at_end = 0;
+                                    } else {
+                                        p++;
+                                        while (*p && is_ifs_whitespace(*p, ifs)) p++;
+                                        push_empty_at_end = 1;
+                                    }
+                                } else {
+                                    sb_append(&sb, *p++);
+                                    push_empty_at_end = 1;
+                                }
+                            }
+                        } else {
+                            sb_append_str(&sb, val);
+                        }
+                        if (free_val) free(val);
+                    }
+                    free(var_name);
+                }
+            }
+        } else if (input[i] == '`') {
+             i++;
+             size_t start = i;
+             while (i < len && input[i] != '`') {
+                 if (input[i] == '\\' && i + 1 < len && input[i+1] == '`') i += 2;
+                 else i++;
+             }
+             size_t cmd_len = i - start;
+             char *cmd = xmalloc(cmd_len + 1);
+             strncpy(cmd, input + start, cmd_len);
+             cmd[cmd_len] = '\0';
+             if (i < len) i++; 
+             
+             char *output = execute_subshell_capture(cmd);
+             
+             if (allow_split && in_quote == 0) {
+                 const char *p = output;
+                while (*p) {
+                    if (is_ifs(*p, ifs)) {
+                        if (is_ifs_whitespace(*p, ifs) && result_count == 0 && sb.len == 0) {
+                             p++;
+                             while (*p && is_ifs_whitespace(*p, ifs)) p++;
+                             continue;
+                        }
+
+                        results = xrealloc(results, (result_count + 2) * sizeof(char *));
+                        results[result_count++] = sb_finish(&sb);
+                        sb_init(&sb);
+                        
+                        if (is_ifs_whitespace(*p, ifs)) {
+                            while (*p && is_ifs_whitespace(*p, ifs)) p++;
+                            if (*p && is_ifs(*p, ifs) && !is_ifs_whitespace(*p, ifs)) {
+                                p++;
+                                while (*p && is_ifs_whitespace(*p, ifs)) p++;
+                            }
+                            push_empty_at_end = 0;
+                        } else {
+                            p++;
+                            while (*p && is_ifs_whitespace(*p, ifs)) p++;
+                            push_empty_at_end = 1;
+                        }
+                    } else {
+                        sb_append(&sb, *p++);
+                        push_empty_at_end = 1;
+                    }
+                }
+             } else {
+                 sb_append_str(&sb, output);
+             }
+             free(cmd);
+             free(output);
+        } else {
+            if (allow_split && in_quote == 0 && is_ifs(input[i], ifs)) {
+                results = xrealloc(results, (result_count + 2) * sizeof(char *));
+                results[result_count++] = sb_finish(&sb);
+                sb_init(&sb);
+                
+                if (is_ifs_whitespace(input[i], ifs)) {
+                    i++;
+                    while (i < len && is_ifs_whitespace(input[i], ifs)) i++;
+                    if (i < len && is_ifs(input[i], ifs) && !is_ifs_whitespace(input[i], ifs)) {
+                        i++;
+                        while (i < len && is_ifs_whitespace(input[i], ifs)) i++;
+                    }
+                    push_empty_at_end = 0;
+                } else {
+                    i++;
+                    while (i < len && is_ifs_whitespace(input[i], ifs)) i++;
+                    push_empty_at_end = 1;
+                }
+            } else {
+                sb_append(&sb, input[i++]);
+                push_empty_at_end = 1;
+            }
+        }
+    }
+    
+    if (push_empty_at_end) {
+        results = xrealloc(results, (result_count + 2) * sizeof(char *));
+        results[result_count++] = sb_finish(&sb);
+    } else {
+        free(sb.data);
+    }
+    
+    if (results) results[result_count] = NULL;
+    
+    if (ifs_val) free(ifs_val);
+    free(tilde_expanded);
+    
+    return results;
+}
+
+char *expand_word(const char *word) {
+    char **res = expand_word_internal(word, 0);
+    if (!res) return NULL;
+    char *ret = res[0];
+    free(res); 
+    return ret;
+}
+
+char **expand_word_split(const char *word) {
+    return expand_word_internal(word, 1);
+}
+
+static int has_glob_chars(const char *str) {
+    int in_single = 0;
+    int in_double = 0;
+    size_t len = strlen(str);
+    for (size_t i = 0; i < len; i++) {
+        char c = str[i];
+        if (c == '\\') { i++; continue; }
+        if (c == '\'') { in_single = !in_single; continue; }
+        if (c == '"') { in_double = !in_double; continue; }
+        if (!in_single && !in_double) {
+            if (c == '*' || c == '?' || c == '[') return 1;
+        }
+    }
+    return 0;
+}
+
+static char *prepare_glob_pattern(const char *str) {
+    size_t len = strlen(str);
+    char *res = xmalloc(len * 2 + 1);
+    size_t res_idx = 0;
+    int in_single = 0;
+    int in_double = 0;
+    for (size_t i = 0; i < len; i++) {
+        char c = str[i];
+        if (in_single) {
+            if (c == '\'') in_single = 0;
+            else { res[res_idx++] = '\\'; res[res_idx++] = c; }
+        } else if (in_double) {
+            if (c == '"') in_double = 0;
+            else if (c == '\\') {
+                if (i + 1 < len) {
+                    char next = str[i+1];
+                    if (next == '$' || next == '`' || next == '"' || next == '\\') {
+                        res[res_idx++] = '\\'; res[res_idx++] = next; i++;
+                    } else {
+                        res[res_idx++] = '\\'; res[res_idx++] = '\\'; res[res_idx++] = '\\'; res[res_idx++] = next; i++;
+                    }
+                }
+            } else { res[res_idx++] = '\\'; res[res_idx++] = c; }
+        } else {
+            if (c == '\\') {
+                if (i + 1 < len) { res[res_idx++] = '\\'; res[res_idx++] = str[i+1]; i++; }
+            } else if (c == '\'') in_single = 1;
+            else if (c == '"') in_double = 1;
+            else res[res_idx++] = c;
+        }
+    }
+    res[res_idx] = '\0';
+    return res;
+}
+
+static int execute_simple_command(ASTNode *node);
+static int execute_pipeline(ASTNode *node);
+static int execute_list(ASTNode *node);
+static int execute_if(ASTNode *node);
+static int execute_while(ASTNode *node);
+static int execute_and_or(ASTNode *node);
+static int execute_for(ASTNode *node);
+
+static int execute_simple_command(ASTNode *node) {
+    if (!node || node->type != NODE_COMMAND) return 1;
+
+    // Trace mode (set -x)
+    if (shell_trace_mode && node->data.command.args && node->data.command.args[0]) {
+        char *ps4 = var_get("PS4");
+        fprintf(stderr, "%s", ps4 ? ps4 : "+ ");
+        if (ps4) free(ps4);
+        
+        // Print command being executed
+        for (int i = 0; node->data.command.args[i]; i++) {
+            if (i > 0) fprintf(stderr, " ");
+            fprintf(stderr, "%s", node->data.command.args[i]);
+        }
+        fprintf(stderr, "\n");
+    }
+
+    // Debug trace
+    if (node->data.command.args && node->data.command.args[0]) {
+        FILE *f = fopen("/tmp/posish_debug.log", "a");
+        if (f) {
+            fprintf(f, "DEBUG: executing command: %s\n", node->data.command.args[0]);
+            fclose(f);
+        }
+    } else if (node->data.command.assignment_count > 0) {
+        FILE *f = fopen("/tmp/posish_debug.log", "a");
+        if (f) {
+            fprintf(f, "DEBUG: executing assignment\n");
+            fclose(f);
+        }
+    }
+    
+    for (size_t i = 0; i < node->data.command.assignment_count; i++) {
+        char *expanded_val = expand_word(node->data.command.assignments[i].value);
+        var_set(node->data.command.assignments[i].name, expanded_val);
+        free(expanded_val);
+    }
+    
+    if (node->data.command.assignment_count > 0) {
+        FILE *f = fopen("/tmp/posish_debug.log", "a");
+        if (f) {
+            fprintf(f, "DEBUG: assignment loop finished\n");
+            fclose(f);
+        }
+    }
+
+    if (node->data.command.arg_count == 0) {
+        return 0;
+    }
+
+    char **argv = NULL;
+    size_t argc = 0;
+    
+    for (size_t i = 0; i < node->data.command.arg_count; i++) {
+        char **expanded_list = expand_word_split(node->data.command.args[i]);
+        if (!expanded_list) continue;
+        
+        for (int k = 0; expanded_list[k]; k++) {
+            char *expanded = expanded_list[k];
+            
+            if (has_glob_chars(expanded)) {
+                char *pattern = prepare_glob_pattern(expanded);
+                glob_t glob_result;
+                int flags = GLOB_NOCHECK; 
+                
+                if (glob(pattern, flags, NULL, &glob_result) == 0) {
+                    argv = xrealloc(argv, (argc + glob_result.gl_pathc + 1) * sizeof(char *));
+                    for (size_t j = 0; j < glob_result.gl_pathc; j++) {
+                        argv[argc++] = xstrdup(glob_result.gl_pathv[j]);
+                    }
+                    globfree(&glob_result);
+                } else {
+                    argv = xrealloc(argv, (argc + 2) * sizeof(char *));
+                    argv[argc++] = expanded;
+                    expanded = NULL;
+                }
+                free(pattern);
+            } else {
+                argv = xrealloc(argv, (argc + 2) * sizeof(char *));
+                argv[argc++] = expanded;
+                expanded = NULL;
+            }
+            if (expanded) free(expanded);
+        }
+        free(expanded_list);
+    }
+    argv[argc] = NULL;
+
+    ASTNode *func_body = func_get(argv[0]);
+    if (func_body) {
+        int saved_stdin = dup(STDIN_FILENO);
+        int saved_stdout = dup(STDOUT_FILENO);
+        int saved_stderr = dup(STDERR_FILENO);
+
+        if (handle_redirections(node->data.command.redirections, node->data.command.redirection_count) != 0) {
+            for (size_t i = 0; i < argc; i++) free(argv[i]);
+            free(argv);
+            dup2(saved_stdin, STDIN_FILENO);
+            dup2(saved_stdout, STDOUT_FILENO);
+            dup2(saved_stderr, STDERR_FILENO);
+            close(saved_stdin);
+            close(saved_stdout);
+            close(saved_stderr);
+            return 1;
+        }
+
+        int old_count = var_get_positional_count();
+        char **old_params = var_get_all_positional();
+
+        if (argc > 1) {
+            var_set_positional(argc - 1, argv + 1);
+        } else {
+            var_set_positional(0, NULL);
+        }
+        
+        // Push scope for function-local variables
+        var_push_scope();
+        
+        int status = executor_execute(func_body);
+        
+        // Pop scope to cleanup local variables
+        var_pop_scope();
+        
+        if (status == EXIT_RETURN) {
+            status = func_return_status;
+        }
+        
+        var_set_positional(old_count, old_params);
+        
+        if (old_params) {
+            for (int i = 0; i < old_count; i++) free(old_params[i]);
+            free(old_params);
+        }
+
+        dup2(saved_stdin, STDIN_FILENO);
+        dup2(saved_stdout, STDOUT_FILENO);
+        dup2(saved_stderr, STDERR_FILENO);
+        close(saved_stdin);
+        close(saved_stdout);
+        close(saved_stderr);
+
+        for (size_t i = 0; i < argc; i++) free(argv[i]);
+        free(argv);
+        return status;
+    }
+
+    if (builtin_is_builtin(argv[0])) {
+        int is_exec_no_args = (strcmp(argv[0], "exec") == 0 && argc == 1);
+        
+        int saved_stdin = -1, saved_stdout = -1, saved_stderr = -1;
+        
+        if (!is_exec_no_args) {
+            saved_stdin = dup(STDIN_FILENO);
+            saved_stdout = dup(STDOUT_FILENO);
+            saved_stderr = dup(STDERR_FILENO);
+        }
+
+        if (handle_redirections(node->data.command.redirections, node->data.command.redirection_count) != 0) {
+            for (size_t i = 0; i < argc; i++) free(argv[i]);
+            free(argv);
+            
+            if (!is_exec_no_args) {
+                dup2(saved_stdin, STDIN_FILENO);
+                dup2(saved_stdout, STDOUT_FILENO);
+                dup2(saved_stderr, STDERR_FILENO);
+                close(saved_stdin);
+                close(saved_stdout);
+                close(saved_stderr);
+            }
+            return 1;
+        }
+
+        int status = builtin_run(argv);
+        
+        if (!is_exec_no_args) {
+            dup2(saved_stdin, STDIN_FILENO);
+            dup2(saved_stdout, STDOUT_FILENO);
+            dup2(saved_stderr, STDERR_FILENO);
+            close(saved_stdin);
+            close(saved_stdout);
+            close(saved_stderr);
+        }
+
+        for (size_t i = 0; i < argc; i++) free(argv[i]);
+        free(argv);
+        return status;
+    }
+
+    char *executable = find_executable(argv[0]);
+    if (!executable) {
+        error_msg("%s: not found", argv[0]);
+        for (size_t i = 0; i < argc; i++) free(argv[i]);
+        free(argv);
+        return 127;
+    }
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        signal(SIGINT, SIG_DFL);
+        signal(SIGQUIT, SIG_DFL);
+        signal(SIGTSTP, SIG_DFL);
+        signal(SIGTTIN, SIG_DFL);
+        signal(SIGTTOU, SIG_DFL);
+        
+        if (handle_redirections(node->data.command.redirections, 
+                              node->data.command.redirection_count) != 0) {
+            exit(1);
+        }
+
+        char **env = var_get_environ();
+        execve(executable, argv, env);
+        error_sys("execve");
+        exit(126);
+    } else if (pid < 0) {
+        error_sys("fork");
+        free(executable);
+        for (size_t i = 0; i < argc; i++) free(argv[i]);
+        free(argv);
+        return 1;
+    }
+
+    setpgid(pid, pid);
+    Job *j = job_add(pid, argv[0], JOB_RUNNING);
+    var_set_last_bg_pid(pid);
+    
+    int status = job_wait(j);
+    
+    free(executable);
+    for (size_t i = 0; i < argc; i++) free(argv[i]);
+    free(argv);
+
+    if (WIFEXITED(status)) {
+        return WEXITSTATUS(status);
+    } else if (WIFSIGNALED(status)) {
+        return 128 + WTERMSIG(status);
+    }
+    return 0;
+}
+
+static int execute_pipeline(ASTNode *node) {
+    int pipefd[2];
+    if (pipe(pipefd) < 0) {
+        perror("posish: pipe failed");
+        return 1;
+    }
+
+    pid_t pid1 = fork();
+    if (pid1 == 0) {
+        close(pipefd[0]);
+        dup2(pipefd[1], STDOUT_FILENO);
+        close(pipefd[1]);
+        exit(executor_execute(node->data.pipeline.left));
+    }
+
+    pid_t pid2 = fork();
+    if (pid2 == 0) {
+        close(pipefd[1]);
+        dup2(pipefd[0], STDIN_FILENO);
+        close(pipefd[0]);
+        exit(executor_execute(node->data.pipeline.right));
+    }
+
+    close(pipefd[0]);
+    close(pipefd[1]);
+
+    int status1, status2;
+    waitpid(pid1, &status1, 0);
+    waitpid(pid2, &status2, 0);
+
+    if (WIFEXITED(status2)) {
+        return WEXITSTATUS(status2);
+    }
+    return 1;
+}
+
+static int execute_list(ASTNode *node) {
+    int status = 0;
+    
+    FILE *f = fopen("/tmp/posish_debug.log", "a");
+    if (f) {
+        fprintf(f, "DEBUG: execute_list enter\n");
+        fclose(f);
+    }
+
+    if (node->data.list.left) {
+        if (node->data.list.async) {
+            pid_t pid = fork();
+            if (pid == 0) {
+                setpgid(0, 0);
+                exit(executor_execute(node->data.list.left));
+            } else if (pid < 0) {
+                perror("posish: fork failed");
+            } else {
+                setpgid(pid, pid);
+                Job *j = job_add(pid, "background task", JOB_RUNNING);
+                printf("[%d] %d\n", j->id, pid);
+                var_set_last_bg_pid(pid);
+                status = 0;
+            }
+        } else {
+            status = executor_execute(node->data.list.left);
+            if (status == EXIT_BREAK || status == EXIT_CONTINUE || status == EXIT_RETURN) {
+                return status;
+            }
+        }
+    }
+    
+    if (node->data.list.right) {
+        f = fopen("/tmp/posish_debug.log", "a");
+        if (f) {
+            fprintf(f, "DEBUG: execute_list executing right\n");
+            fclose(f);
+        }
+        status = executor_execute(node->data.list.right);
+    } else {
+        f = fopen("/tmp/posish_debug.log", "a");
+        if (f) {
+            fprintf(f, "DEBUG: execute_list no right node\n");
+            fclose(f);
+        }
+    }
+    
+    return status;
+}
+
+static int execute_for(ASTNode *node) {
+    char **items = NULL;
+    size_t item_count = 0;
+    
+    if (node->data.for_loop.word_list) {
+        for (size_t i = 0; i < node->data.for_loop.word_count; i++) {
+            char **expanded_list = expand_word_split(node->data.for_loop.word_list[i]);
+            if (expanded_list) {
+                for (int k = 0; expanded_list[k]; k++) {
+                    char *expanded = expanded_list[k];
+                    
+                    if (has_glob_chars(expanded)) {
+                        char *pattern = prepare_glob_pattern(expanded);
+                        glob_t glob_result;
+                        int flags = GLOB_NOCHECK;
+                        
+                        if (glob(pattern, flags, NULL, &glob_result) == 0) {
+                            items = xrealloc(items, (item_count + glob_result.gl_pathc) * sizeof(char *));
+                            for (size_t j = 0; j < glob_result.gl_pathc; j++) {
+                                items[item_count++] = xstrdup(glob_result.gl_pathv[j]);
+                            }
+                            globfree(&glob_result);
+                        } else {
+                            items = xrealloc(items, (item_count + 1) * sizeof(char *));
+                            items[item_count++] = expanded;
+                            expanded = NULL;
+                        }
+                        free(pattern);
+                    } else {
+                        items = xrealloc(items, (item_count + 1) * sizeof(char *));
+                        items[item_count++] = expanded;
+                        expanded = NULL;
+                    }
+                    if (expanded) free(expanded);
+                }
+                free(expanded_list);
+            }
+        }
+    } else {
+        char **args = var_get_all_positional();
+        if (args) {
+            for (int i = 0; args[i] != NULL; i++) {
+                items = xrealloc(items, (item_count + 1) * sizeof(char *));
+                items[item_count++] = xstrdup(args[i]);
+                free(args[i]);
+            }
+            free(args);
+        }
+    }
+    
+    int status = 0;
+    for (size_t i = 0; i < item_count; i++) {
+        signal_check_pending();
+        var_set(node->data.for_loop.var_name, items[i]);
+        if (node->data.for_loop.body) {
+            status = executor_execute(node->data.for_loop.body);
+            if (status == EXIT_BREAK) {
+                if (executor_break_count > 1) {
+                    executor_break_count--;
+                    return EXIT_BREAK;
+                }
+                status = 0;
+                break;
+            } else if (status == EXIT_CONTINUE) {
+                if (executor_continue_count > 1) {
+                    executor_continue_count--;
+                    return EXIT_CONTINUE;
+                }
+                status = 0;
+                continue;
+            } else if (status == EXIT_RETURN) {
+                break;
+            }
+        }
+        free(items[i]);
+    }
+    if (items) free(items);
+    
+    return status;
+}
+
+static int execute_if(ASTNode *node) {
+    int status = executor_execute(node->data.if_stmt.condition);
+    
+    if (status == 0) {
+        return executor_execute(node->data.if_stmt.then_branch);
+    } else {
+        if (node->data.if_stmt.else_branch) {
+            return executor_execute(node->data.if_stmt.else_branch);
+        }
+    }
+    return 0;
+}
+
+static int execute_while(ASTNode *node) {
+    int status = 0;
+    while (1) {
+        signal_check_pending();
+        int cond_status = executor_execute(node->data.while_loop.condition);
+        if (cond_status != 0) break;
+        
+        status = executor_execute(node->data.while_loop.body);
+        if (status == EXIT_BREAK) {
+            if (executor_break_count > 1) {
+                executor_break_count--;
+                return EXIT_BREAK;
+            }
+            status = 0;
+            break;
+        } else if (status == EXIT_CONTINUE) {
+            if (executor_continue_count > 1) {
+                executor_continue_count--;
+                return EXIT_CONTINUE;
+            }
+            status = 0;
+            continue;
+        } else if (status == EXIT_RETURN) {
+            return status;
+        }
+    }
+    return status;
+}
+
+static int execute_until(ASTNode *node) {
+    int status = 0;
+    while (1) {
+        signal_check_pending();
+        int cond_status = executor_execute(node->data.until_loop.condition);
+        if (cond_status == 0) break;
+        
+        status = executor_execute(node->data.until_loop.body);
+        if (status == EXIT_BREAK) {
+            if (executor_break_count > 1) {
+                executor_break_count--;
+                return EXIT_BREAK;
+            }
+            status = 0;
+            break;
+        } else if (status == EXIT_CONTINUE) {
+            if (executor_continue_count > 1) {
+                executor_continue_count--;
+                return EXIT_CONTINUE;
+            }
+            status = 0;
+            continue;
+        } else if (status == EXIT_RETURN) {
+            return status;
+        }
+    }
+    return status;
+}
+
+
+static int execute_subshell(ASTNode *node) {
+    pid_t pid = fork();
+    
+    if (pid == 0) {
+        int status = executor_execute(node->data.subshell.body);
+        exit(status);
+    } else if (pid > 0) {
+        int status;
+        waitpid(pid, &status, 0);
+        if (WIFEXITED(status)) {
+            return WEXITSTATUS(status);
+        }
+        return 1;
+    } else {
+        perror("fork");
+        return 1;
+    }
+}
+
+static int execute_case(ASTNode *node) {
+    char *word = expand_word(node->data.case_stmt.word);
+    int status = 0;
+    int matched = 0;
+
+    for (size_t i = 0; i < node->data.case_stmt.item_count; i++) {
+        CaseItem *item = &node->data.case_stmt.items[i];
+        
+        if (item->patterns) {
+            for (int j = 0; item->patterns[j]; j++) {
+                char *pattern = expand_word(item->patterns[j]);
+                
+                if (fnmatch(pattern, word, 0) == 0) {
+                    matched = 1;
+                    free(pattern);
+                    break;
+                }
+                free(pattern);
+            }
+        }
+        
+        if (matched) {
+            if (item->commands) {
+                status = executor_execute(item->commands);
+            }
+            break;
+        }
+    }
+    
+    free(word);
+    return status;
+}
+
+static int execute_group(ASTNode *node) {
+    return executor_execute(node->data.group.body);
+}
+
+static int execute_function_def(ASTNode *node) {
+    ASTNode *body_copy = ast_copy(node->data.function.body);
+    func_add(node->data.function.name, body_copy);
+    return 0;
+}
+
+static int execute_and_or(ASTNode *node) {
+    int status = executor_execute(node->data.pipeline.left);
+    
+    if (node->type == NODE_AND) {
+        if (status == 0) {
+            return executor_execute(node->data.pipeline.right);
+        } else {
+            return status;
+        }
+    } else if (node->type == NODE_OR) {
+        if (status != 0) {
+            return executor_execute(node->data.pipeline.right);
+        } else {
+            return status;
+        }
+    }
+    return status;
+}
+
+int executor_execute(ASTNode *node) {
+    if (!node) return 0;
+
+    signal_check_pending();
+
+    int status = 0;
+    if (node->type == NODE_COMMAND) {
+        status = execute_simple_command(node);
+    } else if (node->type == NODE_PIPELINE) {
+        status = execute_pipeline(node);
+    } else if (node->type == NODE_LIST) {
+        status = execute_list(node);
+    } else if (node->type == NODE_IF) {
+        status = execute_if(node);
+    } else if (node->type == NODE_WHILE) {
+        status = execute_while(node);
+    } else if (node->type == NODE_UNTIL) {
+        status = execute_until(node);
+    } else if (node->type == NODE_FOR) {
+        status = execute_for(node);
+    } else if (node->type == NODE_SUBSHELL) {
+        status = execute_subshell(node);
+    } else if (node->type == NODE_CASE) {
+        status = execute_case(node);
+    } else if (node->type == NODE_GROUP) {
+        status = execute_group(node);
+    } else if (node->type == NODE_FUNCTION) {
+        status = execute_function_def(node);
+    } else if (node->type == NODE_AND || node->type == NODE_OR) {
+        status = execute_and_or(node);
+    }
+
+    last_exit_status = status;
+    return status;
+}
+// Pattern removal helper functions
+// Remove shortest matching suffix
+static char *remove_suffix_shortest(const char *str, const char *pattern) {
+    if (!str || !pattern) return xstrdup(str ? str : "");
+    
+    size_t len = strlen(str);
+    // Try matching from end backwards (shortest match first)
+    for (size_t i = len; i > 0; i--) {
+        if (fnmatch(pattern, str + i, 0) == 0) {
+            char *result = xmalloc(i + 1);
+            strncpy(result, str, i);
+            result[i] = '\0';
+            return result;
+        }
+    }
+    return xstrdup(str);
+}
+
+// Remove longest matching suffix
+static char *remove_suffix_longest(const char *str, const char *pattern) {
+    if (!str || !pattern) return xstrdup(str ? str : "");
+    
+    size_t len = strlen(str);
+    // Try matching from start forwards (longest match first)
+    for (size_t i = 0; i <= len; i++) {
+        if (fnmatch(pattern, str + i, 0) == 0) {
+            char *result = xmalloc(i + 1);
+            strncpy(result, str, i);
+            result[i] = '\0';
+            return result;
+        }
+    }
+    return xstrdup(str);
+}
+
+// Remove shortest matching prefix
+static char *remove_prefix_shortest(const char *str, const char *pattern) {
+    if (!str || !pattern) return xstrdup(str ? str : "");
+    
+    size_t len = strlen(str);
+    // Try matching from start (shortest match first)
+    for (size_t i = 0; i <= len; i++) {
+        char temp[i + 1];
+        strncpy(temp, str, i);
+        temp[i] = '\0';
+        if (fnmatch(pattern, temp, 0) == 0) {
+            return xstrdup(str + i);
+        }
+    }
+    return xstrdup(str);
+}
+
+// Remove longest matching prefix
+static char *remove_prefix_longest(const char *str, const char *pattern) {
+    if (!str || !pattern) return xstrdup(str ? str : "");
+    
+    size_t len = strlen(str);
+    // Try matching from end backwards (longest match first)
+    for (size_t i = len; i > 0; i--) {
+        char temp[i + 1];
+        strncpy(temp, str, i);
+        temp[i] = '\0';
+        if (fnmatch(pattern, temp, 0) == 0) {
+            return xstrdup(str + i);
+        }
+    }
+    return xstrdup(str);
+}

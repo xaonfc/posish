@@ -1,0 +1,33 @@
+i# POSIX standard (cannot include since it's copyrighted)
+docs/susv4-2018
+
+# Build artifacts
+posish
+obj/*
+*.o
+*.a
+*.so
+*.dylib
+
+# Editor/IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Debugging and profiling
+core
+vgcore.*
+gmon.out
+*.dSYM/
+
+# Test artifacts
+test_output/
+*.log
+
+# Backup files
+*.bak
+*.orig
+

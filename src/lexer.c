@@ -18,6 +18,7 @@ void lexer_init(Lexer *lexer, const char *input) {
     lexer->input = input;
     lexer->pos = 0;
     lexer->len = strlen(input);
+    lexer->current_line = 1;
 }
 
 void free_token(Token token) {
@@ -58,15 +59,18 @@ static int match_operator(const char *str) {
 
 static void lexer_advance(Lexer *lexer) {
     if (lexer->pos < lexer->len) {
+        if (lexer->input[lexer->pos] == '\n') {
+            lexer->current_line++;
+        }
         lexer->pos++;
     }
 }
 
 Token lexer_next_token(Lexer *lexer) {
-    Token token = {TOKEN_EOF, NULL};
+    Token token = {TOKEN_EOF, NULL, lexer->current_line};
     
     while (lexer->pos < lexer->len && isspace(lexer->input[lexer->pos]) && lexer->input[lexer->pos] != '\n') {
-        lexer->pos++;
+        lexer_advance(lexer);
     }
 
     if (lexer->pos >= lexer->len) {
@@ -79,7 +83,7 @@ Token lexer_next_token(Lexer *lexer) {
     if (op_len > 0) {        if (lexer->input[lexer->pos] == '\n') {
             token.type = TOKEN_NEWLINE;
             token.value = (char*)"\n"; // Static string, no allocation
-            lexer->pos++;
+            lexer_advance(lexer);
             return token;
         }
 
@@ -88,7 +92,7 @@ Token lexer_next_token(Lexer *lexer) {
        for (int i = 0; OPERATORS[i]; i++) {
             if (strncmp(lexer->input + lexer->pos, OPERATORS[i], op_len) == 0 && strlen(OPERATORS[i]) == (size_t)op_len) {
                 token.value = (char*)OPERATORS[i]; // Static string, no allocation
-                lexer->pos += op_len;
+                for (int k=0; k<op_len; k++) lexer_advance(lexer);
                 return token;
             }
         }
@@ -96,13 +100,13 @@ Token lexer_next_token(Lexer *lexer) {
         token.value = xmalloc(op_len + 1);
         strncpy(token.value, lexer->input + lexer->pos, op_len);
         token.value[op_len] = '\0';
-        lexer->pos += op_len;
+        for (int k=0; k<op_len; k++) lexer_advance(lexer);
         return token;
     }
 
     if (c == '#') {
         while (lexer->pos < lexer->len && lexer->input[lexer->pos] != '\n') {
-            lexer->pos++;
+            lexer_advance(lexer);
         }
         return lexer_next_token(lexer);
     }

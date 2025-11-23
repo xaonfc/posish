@@ -48,6 +48,7 @@ typedef struct {
 
 typedef struct ASTNode {
     NodeType type;
+    int lineno; // Line number from source
     union {
         struct {
             char **args; // NULL terminated array of strings

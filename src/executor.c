@@ -956,19 +956,7 @@ static int execute_for(ASTNode *node);
 static int execute_simple_command(ASTNode *node) {
     if (!node || node->type != NODE_COMMAND) return 1;
 
-    // Trace mode (set -x)
-    if (shell_trace_mode && node->data.command.args && node->data.command.args[0]) {
-        char *ps4 = var_get("PS4");
-        fprintf(stderr, "%s", ps4 ? ps4 : "+ ");
-        if (ps4) free(ps4);
-        
-        // Print command being executed
-        for (int i = 0; node->data.command.args[i]; i++) {
-            if (i > 0) fprintf(stderr, " ");
-            fprintf(stderr, "%s", node->data.command.args[i]);
-        }
-        fprintf(stderr, "\n");
-    }
+
 
     // Debug trace
     if (node->data.command.args && node->data.command.args[0]) {
@@ -1040,6 +1028,19 @@ static int execute_simple_command(ASTNode *node) {
         free(expanded_list);
     }
     argv[argc] = NULL;
+
+    // Trace mode (set -x) - Print expanded command
+    if (shell_trace_mode && argv[0]) {
+        char *ps4 = var_get("PS4");
+        fprintf(stderr, "%s", ps4 ? ps4 : "+ ");
+        if (ps4) free(ps4);
+        
+        for (size_t i = 0; i < argc; i++) {
+            if (i > 0) fprintf(stderr, " ");
+            fprintf(stderr, "%s", argv[i]);
+        }
+        fprintf(stderr, "\n");
+    }
 
     ASTNode *func_body = func_get(argv[0]);
     if (func_body) {
@@ -1516,6 +1517,13 @@ int executor_execute(ASTNode *node) {
     if (!node) return 0;
 
     signal_check_pending();
+
+    // Update LINENO
+    if (node->lineno > 0) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%d", node->lineno);
+        var_set("LINENO", buf);
+    }
 
     int status = 0;
     if (node->type == NODE_COMMAND) {

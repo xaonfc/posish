@@ -19,12 +19,14 @@ typedef enum {
 typedef struct {
     TokenType type;
     char *value; // malloc'd string, caller must free
+    int lineno; // Line number where token starts
 } Token;
 
 typedef struct {
     const char *input;
     size_t pos;
     size_t len;
+    int current_line; // Current line number
 } Lexer;
 
 void lexer_init(Lexer *lexer, const char *input);

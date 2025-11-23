@@ -421,15 +421,11 @@ PS1='myprompt> ' posish
 IEEE Std 1003.1-2017 (POSIX.1-2017)
 .SH KNOWN LIMITATIONS
 .IP \(bu 2
-.B LINENO
-special variable is not implemented.
-.IP \(bu
-.B PS2
-continuation prompt is not implemented (requires incomplete command detection).
-.IP \(bu
 Some
 .B set
-options are accepted but not fully implemented (-e, -f, -v, -n, -u, -a, -m, -b, -C, -h).
+options are accepted but not fully implemented (-f, -v, -n, -u, -a, -m, -b, -C, -h).
+.B \-e
+(errexit) is fully implemented.
 .SH AUTHORS
 .PP
 Copyright \(co 2025 xaonfc (Mario)

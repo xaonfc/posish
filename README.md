@@ -230,9 +230,7 @@ posish implements:
 - Near 100% POSIX feature compatibility
 
 **Known Limitations:**
-- `LINENO` special variable not implemented
-- `PS2` continuation prompt not implemented (requires incomplete command detection)
-- Some `set` options accepted but not fully implemented (-e, -f, -v, -n, -u, -a, -m, -b, -C, -h)
+- Some `set` options accepted but not fully implemented (-f, -v, -n, -u, -a, -m, -b, -C, -h). `-e` (errexit) is fully implemented.
 
 ## Development
 

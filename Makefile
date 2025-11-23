@@ -22,7 +22,6 @@ SRCBUILTIN_OBJS = $(OBJ_DIR)/builtin-cmds/cd.o \
                $(OBJ_DIR)/builtin-cmds/jobs.o \
                $(OBJ_DIR)/builtin-cmds/bg.o \
                $(OBJ_DIR)/builtin-cmds/fg.o \
-               $(OBJ_DIR)/builtin-cmds/jobid.o \
                $(OBJ_DIR)/builtin-cmds/test.o \
                $(OBJ_DIR)/builtin-cmds/kill.o \
                $(OBJ_DIR)/builtin-cmds/break.o \

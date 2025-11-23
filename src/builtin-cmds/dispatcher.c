@@ -14,7 +14,6 @@ int builtin_is_builtin(const char *name) {
     if (strcmp(name, "jobs") == 0) return 1;
     if (strcmp(name, "fg") == 0) return 1;
     if (strcmp(name, "bg") == 0) return 1;
-    if (strcmp(name, "jobid") == 0) return 1;
     if (strcmp(name, "alias") == 0) return 1;
     if (strcmp(name, "unalias") == 0) return 1;
     if (strcmp(name, "test") == 0) return 1;
@@ -72,7 +71,6 @@ int builtin_run(char **args) {
     if (strcmp(args[0], "jobs") == 0) return builtin_jobs(args);
     if (strcmp(args[0], "fg") == 0) return builtin_fg(args);
     if (strcmp(args[0], "bg") == 0) return builtin_bg(args);
-    if (strcmp(args[0], "jobid") == 0) return builtin_jobid(args);
     if (strcmp(args[0], "alias") == 0) return builtin_alias(args);
     if (strcmp(args[0], "unalias") == 0) return builtin_unalias(args);
     if (strcmp(args[0], "test") == 0) return builtin_test(args);

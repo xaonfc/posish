@@ -200,22 +200,6 @@ void signal_list_traps(void) {
 void signal_check_pending(void) {
     if (!any_pending_signal) return;
     
-    // Reset flag before processing to catch signals arriving during processing
-    // Note: This is a simple optimization. For strict atomicity we might need more care,
-    // but for this shell it's likely sufficient as we re-check frequently.
-    // However, if a signal arrives *after* we check pending_signals[i] but *before* we finish loop,
-    // we might miss it if we just set it to 0 here.
-    // Safer: Set it to 0, then if we find anything, we processed it.
-    // But wait, if a NEW signal arrives, handler sets it to 1.
-    // So if we set it to 0 here, and a signal arrives, it becomes 1.
-    // The race is:
-    // 1. check flag (it's 1)
-    // 2. set flag = 0
-    // 3. signal arrives -> sets flag = 1, sets pending[sig] = 1
-    // 4. loop checks pending[sig] -> finds it.
-    // 5. next call -> flag is 1 -> loop checks again.
-    // This seems safe.
-    
     any_pending_signal = 0;
 
     for (int i = 0; i < MAX_SIGNALS; i++) {

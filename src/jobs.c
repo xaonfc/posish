@@ -7,6 +7,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <sys/wait.h>
+#include <errno.h>
 
 static Job *jobs = NULL;
 static int next_job_id = 1;
@@ -131,15 +132,21 @@ int job_wait(Job *j) {
     if (!j) return -1;
     
     int status;
+    pid_t pid;
+    
     // Wait for the process group
     // In a real shell, we'd use waitpid with WUNTRACED and handle stops/continues.
     // For now, simple blocking wait.
-    if (waitpid(-j->pgid, &status, 0) < 0) {
+    while ((pid = waitpid(-j->pgid, &status, 0)) < 0) {
+        if (errno == EINTR) continue;
+        
         // Try waiting for the process itself if pgid fails (e.g. if it's same as pid)
-        if (waitpid(j->pgid, &status, 0) < 0) {
+        while ((pid = waitpid(j->pgid, &status, 0)) < 0) {
+            if (errno == EINTR) continue;
             perror("waitpid");
             return -1;
         }
+        break;
     }
     
     if (WIFEXITED(status)) {

@@ -34,10 +34,17 @@ int builtin_set(char **args) {
         
         for (const char *p = opts; *p; p++) {
             switch (*p) {
-                case 'x':  // Trace mode
-                    shell_trace_mode = enable;
-                    break;
-                // Other options can be added here
+                case 'x': shell_trace_mode = enable; break;
+                case 'e': shell_exit_on_error = enable; break;
+                case 'f': shell_no_glob = enable; break;
+                case 'C': shell_no_clobber = enable; break;
+                case 'u': shell_no_unset = enable; break;
+                case 'v': shell_verbose = enable; break;
+                case 'n': shell_no_exec = enable; break;
+                case 'a': shell_all_export = enable; break;
+                case 'm': shell_monitor = enable; break;
+                case 'h': shell_hash_all = enable; break;
+                case 'b': shell_notify = enable; break;
                 default:
                     fprintf(stderr, "set: -%c: invalid option\n", *p);
                     return 1;
@@ -52,9 +59,17 @@ int builtin_set(char **args) {
         const char *opts = &args[i][1];
         for (const char *p = opts; *p; p++) {
             switch (*p) {
-                case 'x':
-                    shell_trace_mode = 0;
-                    break;
+                case 'x': shell_trace_mode = 0; break;
+                case 'e': shell_exit_on_error = 0; break;
+                case 'f': shell_no_glob = 0; break;
+                case 'C': shell_no_clobber = 0; break;
+                case 'u': shell_no_unset = 0; break;
+                case 'v': shell_verbose = 0; break;
+                case 'n': shell_no_exec = 0; break;
+                case 'a': shell_all_export = 0; break;
+                case 'm': shell_monitor = 0; break;
+                case 'h': shell_hash_all = 0; break;
+                case 'b': shell_notify = 0; break;
                 default:
                     fprintf(stderr, "set: +%c: invalid option\n", *p);
                     return 1;

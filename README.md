@@ -257,7 +257,6 @@ posish/
 ```bash
 make              # Build shell
 make clean        # Clean build artifacts
-make install      # Install to /usr/local/bin
 ```
 
 ### Testing

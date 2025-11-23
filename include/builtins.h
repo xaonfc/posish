@@ -17,7 +17,6 @@ int builtin_set(char **args);
 int builtin_jobs(char **args);
 int builtin_bg(char **args);
 int builtin_fg(char **args);
-int builtin_jobid(char **args);
 int builtin_alias(char **args);
 int builtin_unalias(char **args);
 int builtin_test(char **args);

@@ -6,6 +6,7 @@
 #include <string.h>
 #include "builtins.h"
 #include "memalloc.h"
+#include "mem_stack.h"
 #include "lexer.h"
 #include "parser.h"
 #include "executor.h"
@@ -23,7 +24,7 @@ int builtin_eval(char **argv) {
         total_len += strlen(argv[i]) + 1; // +1 for space or null terminator
     }
     
-    char *command = xmalloc(total_len);
+    char *command = mem_stack_alloc(total_len);
     
     command[0] = '\0';
     for (int i = 1; argv[i]; i++) {
@@ -36,19 +37,25 @@ int builtin_eval(char **argv) {
     // Parse the command
     Lexer lexer;
     lexer_init(&lexer, command);
+    
+    struct stackmark smark;
+    mem_stack_push_mark(&smark);
+    
     ASTNode *ast = parser_parse(&lexer);
     
     int status = 0;
     if (ast) {
         // Execute the command
         status = executor_execute(ast);
-        ast_free(ast);
+        // ast_free(ast); // No-op
     } else {
         // Parse error - in interactive mode, don't abort
         fprintf(stderr, "eval: parse error\n");
         status = 1;
     }
     
-    free(command);
+    mem_stack_pop_mark(&smark);
+    
+    // No free needed for command
     return status;
 }

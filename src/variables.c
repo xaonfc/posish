@@ -142,13 +142,18 @@ void var_set(const char *name, const char *value) {
 }
 
 char *var_get(const char *name) {
+    const char *val = var_get_value(name);
+    return val ? xstrdup(val) : NULL;
+}
+
+const char *var_get_value(const char *name) {
     unsigned long h = hash_djb2(name);
     
     // Check cache first
     for (int i = 0; i < VAR_CACHE_SIZE; i++) {
         if (var_cache[i].last_name && strcmp(var_cache[i].last_name, name) == 0) {
             // Cache hit!
-            return xstrdup(var_cache[i].value);
+            return var_cache[i].value;
         }
     }
     
@@ -172,7 +177,7 @@ char *var_get(const char *name) {
                 var_cache[idx].value = xstrdup(v->value);
                 var_cache[idx].scope = scope;
                 
-                return xstrdup(v->value);
+                return var_cache[idx].value;
             }
             v = v->next;
         }
@@ -353,11 +358,16 @@ int var_shift_positional(int n) {
 }
 
 char *var_get_positional(int index) {
+    const char *val = var_get_positional_value(index);
+    return val ? xstrdup(val) : NULL;
+}
+
+const char *var_get_positional_value(int index) {
     if (index == 0) {
-        return var_get("0");
+        return var_get_value("0");
     }
     if (index >= 1 && index <= positional_count) {
-        return xstrdup(positional_args[index - 1]);
+        return positional_args[index - 1];
     }
     return NULL;
 }

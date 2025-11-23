@@ -22,6 +22,7 @@
 #include "input.h" // Added
 #include "signals.h" // Added
 #include "shell_options.h" // Added
+#include "mem_stack.h" // Added
 
 #define MAX_LINE 1024
 
@@ -170,6 +171,9 @@ static int run_script_file(const char *filename) {
         return 0;
     }
     
+    struct stackmark smark;
+    mem_stack_push_mark(&smark);
+    
     ASTNode *ast = parser_parse(&lexer);
     
     int status = 0;
@@ -177,6 +181,8 @@ static int run_script_file(const char *filename) {
         status = executor_execute(ast);
         ast_free(ast);
     }
+    
+    mem_stack_pop_mark(&smark);
     
     free(content);
     return status;
@@ -345,6 +351,10 @@ done_parsing_options:
         // Full parse path
         Lexer lexer;
         lexer_init(&lexer, command_string);
+        
+        struct stackmark smark;
+        mem_stack_push_mark(&smark);
+        
         ASTNode *ast = parser_parse(&lexer);
         
         int status = 0;
@@ -353,8 +363,11 @@ done_parsing_options:
             ast_free(ast);
         } else {
             fprintf(stderr, "%s: parse error\n", argv[0]);
+            mem_stack_pop_mark(&smark);
             return 2;
         }
+        
+        mem_stack_pop_mark(&smark);
         
         return status;
     }
@@ -529,6 +542,9 @@ done_parsing_options:
             Lexer lexer;
             lexer_init(&lexer, command_buffer);
             
+            struct stackmark smark;
+            mem_stack_push_mark(&smark);
+            
             ASTNode *ast = parser_parse(&lexer);
 
             if (ast) {
@@ -536,6 +552,8 @@ done_parsing_options:
                 executor_execute(ast);
                 ast_free(ast);
             }
+            
+            mem_stack_pop_mark(&smark);
             
             free(command_buffer);
             command_buffer = NULL;

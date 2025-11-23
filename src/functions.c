@@ -36,7 +36,7 @@ void func_remove(const char *name) {
             Function *temp = *curr;
             *curr = (*curr)->next;
             free(temp->name);
-            ast_free(temp->body);
+            ast_free_heap(temp->body);
             free(temp);
             return;
         }

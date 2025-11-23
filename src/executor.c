@@ -1361,7 +1361,10 @@ static int execute_for(ASTNode *node) {
 }
 
 static int execute_if(ASTNode *node) {
+    int old_ignore = shell_ignore_errexit;
+    shell_ignore_errexit = 1;
     int status = executor_execute(node->data.if_stmt.condition);
+    shell_ignore_errexit = old_ignore;
     
     if (status == 0) {
         return executor_execute(node->data.if_stmt.then_branch);
@@ -1377,7 +1380,11 @@ static int execute_while(ASTNode *node) {
     int status = 0;
     while (1) {
         signal_check_pending();
+        int old_ignore = shell_ignore_errexit;
+        shell_ignore_errexit = 1;
         int cond_status = executor_execute(node->data.while_loop.condition);
+        shell_ignore_errexit = old_ignore;
+        
         if (cond_status != 0) break;
         
         status = executor_execute(node->data.while_loop.body);
@@ -1406,7 +1413,10 @@ static int execute_until(ASTNode *node) {
     int status = 0;
     while (1) {
         signal_check_pending();
+        int old_ignore = shell_ignore_errexit;
+        shell_ignore_errexit = 1;
         int cond_status = executor_execute(node->data.until_loop.condition);
+        shell_ignore_errexit = old_ignore;
         if (cond_status == 0) break;
         
         status = executor_execute(node->data.until_loop.body);
@@ -1495,7 +1505,10 @@ static int execute_function_def(ASTNode *node) {
 }
 
 static int execute_and_or(ASTNode *node) {
+    int old_ignore = shell_ignore_errexit;
+    shell_ignore_errexit = 1;
     int status = executor_execute(node->data.pipeline.left);
+    shell_ignore_errexit = old_ignore;
     
     if (node->type == NODE_AND) {
         if (status == 0) {
@@ -1553,6 +1566,37 @@ int executor_execute(ASTNode *node) {
     }
 
     last_exit_status = status;
+
+    if (shell_exit_on_error && status != 0) {
+        // Check if we should ignore error
+        // -e is ignored if:
+        // 1. command is part of while/until condition
+        // 2. command is part of if/elif condition
+        // 3. command is part of && or || (except the last one)
+        // 4. command is part of ! pipeline
+        
+        // This requires passing context down to executor_execute.
+        // For now, we'll implement a basic version and refine.
+        // But wait, POSIX says:
+        // "The -e setting shall be ignored when executing the compound list following the while, until, if, or elif reserved word, a pipeline beginning with the ! reserved word, or any command of an AND-OR list other than the last."
+        
+        // We need a way to know if we are in such a context.
+        // We can add a flag to executor_execute or use a global.
+        // Let's add a global 'shell_ignore_errexit' in shell_options.
+        
+        // For now, let's just exit if not ignored.
+        // But we haven't implemented the ignore logic yet.
+        // If we just exit, we might break scripts that rely on checking status.
+        // shellbench uses 'if ...' heavily.
+        
+        // We MUST implement the ignore logic.
+        // I'll add 'shell_ignore_errexit' to shell_options.h/c and set it in execute_if, execute_while, etc.
+        
+        extern int shell_ignore_errexit;
+        if (!shell_ignore_errexit) {
+             exit(status);
+        }
+    }
     return status;
 }
 // Pattern removal helper functions

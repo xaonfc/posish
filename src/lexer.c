@@ -197,7 +197,7 @@ Token lexer_next_token(Lexer *lexer) {
                 lexer_advance(lexer);
                 buffer[buf_idx++] = '(';
                 lexer_advance(lexer);
-                lexer_advance(lexer);
+
                 
                 int nesting = 1;
                 while (lexer->pos < lexer->len && nesting > 0) {

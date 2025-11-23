@@ -376,6 +376,12 @@ done_parsing_options:
         return run_script_file(filename);
     }
 
+    // Determine if this is an interactive shell
+    // Interactive if: -i flag OR (stdin is terminal AND no -c or script file)
+    int is_interactive = force_interactive || 
+                         (isatty(STDIN_FILENO) && isatty(STDERR_FILENO) && 
+                          !command_string && arg_idx >= argc);
+
     // Interactive or Login Shell
     if (is_login_shell) {
         // Source /etc/profile
@@ -392,36 +398,50 @@ done_parsing_options:
                 run_script_file(path);
             }
         }
-        
-        // For non-login interactive shells, source ENV
-        char *env_file = var_get("ENV");
-        if (env_file && *env_file) {
-            // Expand tilde in ENV path
-            char expanded_path[1024];
-            if (env_file[0] == '~') {
+    }
+    
+    // For interactive shells (login or not), we might need ENV?
+    // POSIX says: "If the shell is interactive, it shall expand the value of the ENV variable... and source it."
+    // Wait, usually ENV is for interactive shells.
+    // Bash man page: "When bash is invoked as an interactive shell that is not a login shell, it reads and executes commands from ~/.bashrc"
+    // POSIX sh: "If the shell is interactive, it shall expand the value of the parameter ENV... and execute the file."
+    // So it applies to ALL interactive shells?
+    // Usually login shells source profile, non-login source ENV/rc.
+    // But POSIX says ENV is for interactive invocation.
+    // Let's follow POSIX: If interactive, source ENV.
+    
+    if (is_interactive) {
+        char *env_var = var_get("ENV");
+        if (env_var && *env_var) {
+            // Expand variable if it contains expansions? POSIX says "parameter expansion".
+            // For simplicity, we'll just handle direct path or tilde.
+            // A full implementation would run the expansion logic.
+            // Let's assume it's a path for now.
+            
+            char *expanded_path = NULL;
+            if (env_var[0] == '~') {
+                const char *home = getenv("HOME");
                 if (home) {
-                    snprintf(expanded_path, sizeof(expanded_path), "%s%s", home, env_file + 1);
-                    if (access(expanded_path, R_OK) == 0) {
-                        run_script_file(expanded_path);
-                    }
+                    size_t len = strlen(home) + strlen(env_var);
+                    expanded_path = malloc(len + 1);
+                    sprintf(expanded_path, "%s%s", home, env_var + 1);
                 }
             } else {
-                if (access(env_file, R_OK) == 0) {
-                    run_script_file(env_file);
-                }
+                expanded_path = strdup(env_var);
             }
-            free(env_file);
+            
+            if (expanded_path) {
+                if (access(expanded_path, R_OK) == 0) {
+                    run_script_file(expanded_path);
+                }
+                free(expanded_path);
+            }
+            free(env_var);
         }
     }
 
-    // Determine if this is an interactive shell
-    // Interactive if: -i flag OR (stdin is terminal AND no -c or script file)
-    int is_interactive = force_interactive || 
-                         (isatty(STDIN_FILENO) && isatty(STDERR_FILENO) && 
-                          !command_string && arg_idx >= argc);
-
     if (is_interactive) {
-        // Interactive mode
+        // Interactive mode setup
         
         // Put shell in its own process group
         while (tcgetpgrp(STDIN_FILENO) != (getpgrp())) {
@@ -460,7 +480,9 @@ done_parsing_options:
         signal_check_pending();
         char *prompt_str;
         if (command_buffer) {
-            prompt_str = strdup("> ");
+            const char *ps2 = var_get("PS2");
+            if (!ps2) ps2 = "> ";
+            prompt_str = strdup(ps2);
         } else {
             const char *ps1 = var_get("PS1");
             if (!ps1) ps1 = "posish$ "; // Default

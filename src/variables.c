@@ -353,6 +353,9 @@ int var_shift_positional(int n) {
 }
 
 char *var_get_positional(int index) {
+    if (index == 0) {
+        return var_get("0");
+    }
     if (index >= 1 && index <= positional_count) {
         return xstrdup(positional_args[index - 1]);
     }

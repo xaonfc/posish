@@ -45,7 +45,7 @@ static Token parser_consume(Parser *parser) {
 static ASTNode *parse_list(Parser *parser);
 
 ASTNode *parser_parse(Lexer *lexer) {
-    Parser parser = {lexer, {0, NULL}, 0};
+    Parser parser = {lexer, {0, NULL, 0}, 0};
     
     // Parse a list (top level)
     ASTNode *node = parse_list(&parser);
@@ -67,6 +67,7 @@ static ASTNode *parse_compound_list(Parser *parser, const char *terminator);
 static ASTNode *parse_if_statement(Parser *parser) {
     // Expect 'if'
     Token token = parser_consume(parser);
+    int lineno = token.lineno;
     free_token(token);
     
     ASTNode *condition = parse_compound_list(parser, "then");
@@ -110,7 +111,9 @@ static ASTNode *parse_if_statement(Parser *parser) {
     token = parser_consume(parser);
     free_token(token);
     
-    return ast_new_if(condition, then_branch, else_branch);
+    ASTNode *node = ast_new_if(condition, then_branch, else_branch);
+    node->lineno = lineno;
+    return node;
 }
 
 static ASTNode *parse_while_loop(Parser *parser);
@@ -118,6 +121,7 @@ static int parse_redirection(Parser *parser, ASTNode *cmd);
 static ASTNode *parse_while_loop(Parser *parser) {
     // Expect 'while'
     Token token = parser_consume(parser);
+    int lineno = token.lineno;
     free_token(token);
     
     ASTNode *condition = parse_compound_list(parser, "do");
@@ -142,7 +146,9 @@ static ASTNode *parse_while_loop(Parser *parser) {
     token = parser_consume(parser);
     free_token(token);
     
-    return ast_new_while(condition, body);
+    ASTNode *node = ast_new_while(condition, body);
+    node->lineno = lineno;
+    return node;
 }
 
 static ASTNode *parse_until_loop(Parser *parser) {
@@ -178,6 +184,7 @@ static ASTNode *parse_until_loop(Parser *parser) {
 static ASTNode *parse_for_loop(Parser *parser) {
     // Expect 'for'
     Token token = parser_consume(parser);
+    int lineno = token.lineno;
     free_token(token);
     
     // Expect variable name
@@ -272,7 +279,9 @@ static ASTNode *parse_for_loop(Parser *parser) {
     token = parser_consume(parser);
     free_token(token);
     
-    return ast_new_for(var_name, word_list, word_count, body);
+    ASTNode *node = ast_new_for(var_name, word_list, word_count, body);
+    node->lineno = lineno;
+    return node;
 }
 
 static ASTNode *parse_case_statement(Parser *parser) {
@@ -753,6 +762,7 @@ static ASTNode *parse_simple_command(Parser *parser) {
     if (!is_cmd) return NULL;
     
     ASTNode *cmd = ast_new_command();
+    cmd->lineno = token.lineno;
     int seen_command_name = 0;
     
     // Check for alias if it's a WORD

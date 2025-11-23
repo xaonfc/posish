@@ -124,5 +124,7 @@ ASTNode *ast_new_case(const char *word, CaseItem *items, size_t item_count);
 ASTNode *ast_new_binary(NodeType type, ASTNode *left, ASTNode *right);
 void ast_free(ASTNode *node);
 ASTNode *ast_copy(ASTNode *node);
+void ast_free_heap(ASTNode *node);
+ASTNode *ast_clone_to_heap(ASTNode *node);
 
 #endif

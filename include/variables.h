@@ -9,6 +9,7 @@
 void var_init(char **envp);
 void var_set(const char *name, const char *value);
 char *var_get(const char *name);
+const char *var_get_value(const char *name);
 void var_unset(const char *name);
 void var_export(const char *name);
 char **var_get_environ(void);
@@ -20,6 +21,7 @@ char **var_get_all_readonly(void);
 
 void var_set_positional(int argc, char **argv);
 char *var_get_positional(int index);
+const char *var_get_positional_value(int index);
 int var_get_positional_count(void);
 char **var_get_all_positional(void);
 int var_shift_positional(int n);

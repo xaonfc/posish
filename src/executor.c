@@ -3,6 +3,7 @@
 
 #include "executor.h"
 #include "memalloc.h"
+#include "mem_stack.h"
 #include "builtins.h"
 #include "error.h"
 #include "variables.h"
@@ -42,19 +43,19 @@ void executor_set_last_status(int status) {
 // Helper to find executable in PATH
 char *find_executable(const char *command) {
     if (strchr(command, '/')) {
-        return xstrdup(command);
+        return mem_stack_strdup(command);
     }
 
     const char *path_env = getenv("PATH");
     if (!path_env) return NULL;
 
-    char *path_copy = xstrdup(path_env);
+    char *path_copy = mem_stack_strdup(path_env);
     char *dir = strtok(path_copy, ":");
     char *result = NULL;
 
     while (dir) {
         size_t len = strlen(dir) + strlen(command) + 2;
-        char *full_path = xmalloc(len);
+        char *full_path = mem_stack_alloc(len);
         snprintf(full_path, len, "%s/%s", dir, command);
 
         if (access(full_path, X_OK) == 0) {
@@ -62,11 +63,11 @@ char *find_executable(const char *command) {
             break;
         }
 
-        free(full_path);
+        // No free needed for full_path
         dir = strtok(NULL, ":");
     }
 
-    free(path_copy);
+    // No free needed for path_copy
     return result;
 }
 
@@ -166,7 +167,7 @@ static char *execute_subshell_capture(const char *cmd_str) {
     int pipefd[2];
     if (pipe(pipefd) < 0) {
         error_sys("pipe");
-        return xstrdup("");
+        return mem_stack_strdup("");
     }
 
     pid_t pid = fork();
@@ -180,27 +181,30 @@ static char *execute_subshell_capture(const char *cmd_str) {
         ASTNode *node = parser_parse(&lexer);
         
         int status = executor_execute(node);
-        ast_free(node);
+        // ast_free(node); // No-op
         exit(status);
     } else if (pid < 0) {
         error_sys("fork");
         close(pipefd[0]);
         close(pipefd[1]);
-        return xstrdup("");
+        return mem_stack_strdup("");
     }
 
     close(pipefd[1]);
     
     size_t size = 0;
     size_t capacity = 128;
-    char *buffer = xmalloc(capacity);
+    char *buffer = mem_stack_alloc(capacity);
     
     ssize_t n;
     while ((n = read(pipefd[0], buffer + size, capacity - size - 1)) > 0) {
         size += n;
         if (size >= capacity - 1) {
-            capacity *= 2;
-            buffer = xrealloc(buffer, capacity);
+            // We can't easily realloc on stack without moving, but mem_stack_realloc_array handles it (by alloc new + copy)
+            // Since we are just appending, it's fine.
+            size_t new_capacity = capacity * 2;
+            buffer = mem_stack_realloc_array(buffer, capacity, new_capacity, 1);
+            capacity = new_capacity;
         }
     }
     close(pipefd[0]);
@@ -217,7 +221,7 @@ static char *execute_subshell_capture(const char *cmd_str) {
 
 static char *expand_tilde(const char *word) {
     if (word[0] != '~') {
-        return xstrdup(word);
+        return mem_stack_strdup(word);
     }
 
     const char *slash = strchr(word, '/');
@@ -232,7 +236,7 @@ static char *expand_tilde(const char *word) {
             if (pw) home = pw->pw_dir;
         }
     } else {
-        char *username = xmalloc(prefix_len);
+        char *username = mem_stack_alloc(prefix_len);
         strncpy(username, word + 1, prefix_len - 1);
         username[prefix_len - 1] = '\0';
         
@@ -240,19 +244,19 @@ static char *expand_tilde(const char *word) {
         if (pw) {
             home = pw->pw_dir;
         }
-        free(username);
+        // No free needed for username
     }
     
     if (home) {
         size_t home_len = strlen(home);
         size_t suffix_len = slash ? strlen(slash) : 0;
-        char *result = xmalloc(home_len + suffix_len + 1);
+        char *result = mem_stack_alloc(home_len + suffix_len + 1);
         strcpy(result, home);
         if (slash) strcat(result, slash);
         return result;
     }
     
-    return xstrdup(word);
+    return mem_stack_strdup(word);
 }
 
 static long eval_expression(const char **str);
@@ -276,7 +280,7 @@ static long eval_factor(const char **str) {
         const char *start = *str;
         while (isalnum(**str) || **str == '_') (*str)++;
         size_t len = *str - start;
-        char *name = xmalloc(len + 1);
+        char *name = mem_stack_alloc(len + 1);
         strncpy(name, start, len);
         name[len] = '\0';
         
@@ -286,7 +290,7 @@ static long eval_factor(const char **str) {
             val = strtol(val_str, NULL, 10);
             free(val_str);
         }
-        free(name);
+        // No free needed for name
         return val;
     } else if (isdigit(**str) || **str == '-' || **str == '+') {
         char *end;
@@ -364,15 +368,16 @@ typedef struct {
 
 static void sb_init(StringBuilder *sb) {
     sb->cap = 64;
-    sb->data = xmalloc(sb->cap);
+    sb->data = mem_stack_alloc(sb->cap);
     sb->len = 0;
     sb->data[0] = '\0';
 }
 
 static void sb_append(StringBuilder *sb, char c) {
     if (sb->len + 1 >= sb->cap) {
-        sb->cap *= 2;
-        sb->data = xrealloc(sb->data, sb->cap);
+        size_t new_cap = sb->cap * 2;
+        sb->data = mem_stack_realloc_array(sb->data, sb->cap, new_cap, 1);
+        sb->cap = new_cap;
     }
     sb->data[sb->len++] = c;
     sb->data[sb->len] = '\0';
@@ -381,17 +386,19 @@ static void sb_append(StringBuilder *sb, char c) {
 static void sb_append_str(StringBuilder *sb, const char *s) {
     size_t slen = strlen(s);
     if (sb->len + slen + 1 >= sb->cap) {
-        while (sb->len + slen + 1 >= sb->cap) {
-            sb->cap *= 2;
+        size_t new_cap = sb->cap;
+        while (sb->len + slen + 1 >= new_cap) {
+            new_cap *= 2;
         }
-        sb->data = xrealloc(sb->data, sb->cap);
+        sb->data = mem_stack_realloc_array(sb->data, sb->cap, new_cap, 1);
+        sb->cap = new_cap;
     }
     strcpy(sb->data + sb->len, s);
     sb->len += slen;
 }
 
 static char *sb_finish(StringBuilder *sb) {
-    return sb->data; // Transfer ownership
+    return sb->data; // Transfer ownership (stack allocated)
 }
 
 
@@ -413,8 +420,10 @@ static char **expand_word_internal(const char *word, int allow_split) {
     size_t i = 0;
     const char *input = tilde_expanded;
     
-    char *ifs_val = var_get("IFS");
-    char *ifs = ifs_val;
+    const char *ifs = var_get_value("IFS");
+    if (!ifs) {
+        ifs = " \t\n";
+    }
     
     int in_quote = 0;
     int push_empty_at_end = !allow_split;
@@ -492,14 +501,13 @@ static char **expand_word_internal(const char *word, int allow_split) {
                 
                 if (i + 1 < len && input[i] == ')' && input[i+1] == ')') {
                     size_t expr_len = i - start;
-                    char *expr = xmalloc(expr_len + 1);
+                    char *expr = mem_stack_alloc(expr_len + 1);
                     strncpy(expr, input + start, expr_len);
                     expr[expr_len] = '\0';
                     
                     char *expanded_expr = expand_word(expr);
                     long val = evaluate_arithmetic(expanded_expr);
-                    free(expr);
-                    free(expanded_expr);
+                    // No free needed for expr, expanded_expr
                     char val_str[32];
                     snprintf(val_str, sizeof(val_str), "%ld", val);
                     
@@ -553,7 +561,7 @@ static char **expand_word_internal(const char *word, int allow_split) {
                 }
                 if (nesting == 0) {
                     size_t cmd_len = i - 1 - start;
-                    char *cmd = xmalloc(cmd_len + 1);
+                    char *cmd = mem_stack_alloc(cmd_len + 1);
                     strncpy(cmd, input + start, cmd_len);
                     cmd[cmd_len] = '\0';
                     char *output = execute_subshell_capture(cmd);
@@ -592,8 +600,7 @@ static char **expand_word_internal(const char *word, int allow_split) {
                     } else {
                         sb_append_str(&sb, output);
                     }
-                    free(cmd);
-                    free(output);
+                    // No free needed for cmd, output
                 }
             } else {
                 i++; 
@@ -634,7 +641,7 @@ static char **expand_word_internal(const char *word, int allow_split) {
                         size_t pat_start = i;
                         while (i < len && input[i] != '}') i++;
                         size_t pat_len = i - pat_start;
-                        pattern = xmalloc(pat_len + 1);
+                        pattern = mem_stack_alloc(pat_len + 1);
                         strncpy(pattern, input + pat_start, pat_len);
                         pattern[pat_len] = '\0';
                     } else {
@@ -645,23 +652,19 @@ static char **expand_word_internal(const char *word, int allow_split) {
                     if (i < len) i++; // Skip '}'
                     
                     // Get variable value
-                    char *var_value = NULL;
+                    const char *var_value = NULL;
                     if (strcmp(var_name, "?") == 0) {
-                        char buf[32]; snprintf(buf, sizeof(buf), "%d", executor_get_last_status());
-                        var_value = xstrdup(buf);
+                        static char buf[32]; snprintf(buf, sizeof(buf), "%d", executor_get_last_status());
+                        var_value = buf;
                     } else if (strcmp(var_name, "$") == 0) {
-                        char buf[32]; snprintf(buf, sizeof(buf), "%d", getpid());
-                        var_value = xstrdup(buf);
+                        static char buf[32]; snprintf(buf, sizeof(buf), "%d", getpid());
+                        var_value = buf;
                     } else if (strcmp(var_name, "-") == 0) {
-                        // Shell flags - for now just return basic flags
-                        // i = interactive, m = monitor (job control)
-                        var_value = xstrdup("im");
+                        var_value = "im";
                     } else if (isdigit(var_name[0])) {
-                        var_value = var_get_positional(atoi(var_name));
-                        if (!var_value) var_value = xstrdup("");
+                        var_value = var_get_positional_value(atoi(var_name));
                     } else {
-                        var_value = var_get(var_name);
-                        if (!var_value) var_value = xstrdup("");
+                        var_value = var_get_value(var_name);
                     }
                     
                     // Apply pattern removal if needed
@@ -682,17 +685,15 @@ static char **expand_word_internal(const char *word, int allow_split) {
                                 break;
                         }
                         if (result) {
-                            free(var_value);
                             var_value = result;
                         }
                     }
                     
                     if (var_value) {
                         sb_append_str(&sb, var_value);
-                        free(var_value);
                     }
-                    if (pattern) free(pattern);
-                    free(var_name);
+                    // if (pattern) free(pattern); // No free needed
+                    free(var_name); // Free xmalloc'd var_name
                     var_name = NULL;
                     continue;
                 } else {
@@ -708,46 +709,42 @@ static char **expand_word_internal(const char *word, int allow_split) {
                     var_name[var_len] = '\0';
                 }
                 
-                if (var_name) {
-                    char *val = NULL;
-                    int free_val = 0;
+                    if (var_name) {
+                        const char *val = NULL;
                     
                     if (strcmp(var_name, "?") == 0) {
-                        char buf[32]; snprintf(buf, sizeof(buf), "%d", executor_get_last_status());
-                        val = xstrdup(buf); free_val = 1;
+                        static char buf[32]; snprintf(buf, sizeof(buf), "%d", executor_get_last_status());
+                        val = buf;
                     } else if (strcmp(var_name, "$") == 0) {
-                        char buf[32]; snprintf(buf, sizeof(buf), "%d", getpid());
-                        val = xstrdup(buf); free_val = 1;
+                        static char buf[32]; snprintf(buf, sizeof(buf), "%d", getpid());
+                        val = buf;
                     } else if (strcmp(var_name, "-") == 0) {
-                        val = xstrdup("im"); free_val = 1;
+                        val = "im";
                     } else if (strcmp(var_name, "#") == 0) {
-                        char buf[32]; snprintf(buf, sizeof(buf), "%d", var_get_positional_count());
-                        val = xstrdup(buf); free_val = 1;
+                        static char buf[32]; snprintf(buf, sizeof(buf), "%d", var_get_positional_count());
+                        val = buf;
                     } else if (strcmp(var_name, "!") == 0) {
                         pid_t bg_pid = var_get_last_bg_pid();
-                        char buf[32]; if (bg_pid > 0) snprintf(buf, sizeof(buf), "%d", bg_pid); else buf[0] = '\0';
-                        val = xstrdup(buf); free_val = 1;
+                        static char buf[32]; if (bg_pid > 0) snprintf(buf, sizeof(buf), "%d", bg_pid); else buf[0] = '\0';
+                        val = buf;
                     } else if (strcmp(var_name, "@") == 0 || strcmp(var_name, "*") == 0) {
                         char **args = var_get_all_positional();
                         if (args) {
                             size_t total_len = 0;
                             for (int k = 0; args[k]; k++) total_len += strlen(args[k]) + 1;
-                            val = xmalloc(total_len + 1); val[0] = '\0';
+                            char *tmp_val = mem_stack_alloc(total_len + 1); tmp_val[0] = '\0';
                             for (int k = 0; args[k]; k++) {
-                                strcat(val, args[k]);
-                                if (args[k+1]) strcat(val, " ");
+                                strcat(tmp_val, args[k]);
+                                if (args[k+1]) strcat(tmp_val, " ");
                                 free(args[k]);
                             }
                             free(args);
-                        } else { val = xstrdup(""); }
-                        free_val = 1;
+                            val = tmp_val; // This is stack allocated, so it's fine.
+                        } else { val = ""; }
                     } else if (isdigit(var_name[0])) {
-                        val = var_get_positional(atoi(var_name));
-                        if (!val) val = xstrdup("");
-                        free_val = 1;
+                        val = var_get_positional_value(atoi(var_name));
                     } else {
-                        val = var_get(var_name);
-                        if (val) free_val = 1;
+                        val = var_get_value(var_name);
                     }
                     
                     if (val) {
@@ -761,7 +758,7 @@ static char **expand_word_internal(const char *word, int allow_split) {
                                          continue;
                                     }
 
-                                    results = xrealloc(results, (result_count + 2) * sizeof(char *));
+                                    results = mem_stack_realloc_array(results, result_count * sizeof(char*), (result_count + 2) * sizeof(char *), 1);
                                     results[result_count++] = sb_finish(&sb);
                                     sb_init(&sb);
                                     
@@ -785,9 +782,8 @@ static char **expand_word_internal(const char *word, int allow_split) {
                         } else {
                             sb_append_str(&sb, val);
                         }
-                        if (free_val) free(val);
                     }
-                    free(var_name);
+                    // free(var_name); // No free needed (stack allocated)
                 }
             }
         } else if (input[i] == '`') {
@@ -798,7 +794,7 @@ static char **expand_word_internal(const char *word, int allow_split) {
                  else i++;
              }
              size_t cmd_len = i - start;
-             char *cmd = xmalloc(cmd_len + 1);
+             char *cmd = mem_stack_alloc(cmd_len + 1);
              strncpy(cmd, input + start, cmd_len);
              cmd[cmd_len] = '\0';
              if (i < len) i++; 
@@ -815,7 +811,7 @@ static char **expand_word_internal(const char *word, int allow_split) {
                              continue;
                         }
 
-                        results = xrealloc(results, (result_count + 2) * sizeof(char *));
+                        results = mem_stack_realloc_array(results, result_count * sizeof(char*), (result_count + 2) * sizeof(char *), 1);
                         results[result_count++] = sb_finish(&sb);
                         sb_init(&sb);
                         
@@ -839,11 +835,11 @@ static char **expand_word_internal(const char *word, int allow_split) {
              } else {
                  sb_append_str(&sb, output);
              }
-             free(cmd);
-             free(output);
+             // free(cmd); // No free needed
+             // free(output); // No free needed
         } else {
             if (allow_split && in_quote == 0 && is_ifs(input[i], ifs)) {
-                results = xrealloc(results, (result_count + 2) * sizeof(char *));
+                results = mem_stack_realloc_array(results, result_count * sizeof(char*), (result_count + 2) * sizeof(char *), 1);
                 results[result_count++] = sb_finish(&sb);
                 sb_init(&sb);
                 
@@ -868,25 +864,32 @@ static char **expand_word_internal(const char *word, int allow_split) {
     }
     
     if (push_empty_at_end) {
-        results = xrealloc(results, (result_count + 2) * sizeof(char *));
+        results = mem_stack_realloc_array(results, result_count * sizeof(char*), (result_count + 2) * sizeof(char *), 1);
         results[result_count++] = sb_finish(&sb);
     } else {
-        free(sb.data);
+        // free(sb.data); // No free needed
     }
     
     if (results) results[result_count] = NULL;
     
-    if (ifs_val) free(ifs_val);
-    free(tilde_expanded);
+    if (results) results[result_count] = NULL;
+    
+    // if (ifs_val) free(ifs_val); // No longer needed
+    // free(tilde_expanded); // No free needed
     
     return results;
 }
 
+static int has_special_chars(const char *str);
+
 char *expand_word(const char *word) {
+    if (!has_special_chars(word)) {
+        return mem_stack_strdup(word);
+    }
     char **res = expand_word_internal(word, 0);
     if (!res) return NULL;
     char *ret = res[0];
-    free(res); 
+    // free(res); // No free needed
     return ret;
 }
 
@@ -910,9 +913,23 @@ static int has_glob_chars(const char *str) {
     return 0;
 }
 
+static int has_special_chars(const char *str) {
+    // Check for characters that trigger expansion: $ ` \ ' " ~
+    // Also glob chars if we were doing globbing, but expand_word handles that separately?
+    // expand_word returns a single string, so globbing is not performed here?
+    // Wait, expand_word_internal DOES handle globbing? No, execute_simple_command handles globbing.
+    // expand_word_internal handles variable expansion, command substitution, quotes.
+    
+    for (const char *p = str; *p; p++) {
+        if (*p == '$' || *p == '`' || *p == '\\' || *p == '\'' || *p == '"') return 1;
+        if (p == str && *p == '~') return 1;
+    }
+    return 0;
+}
+
 static char *prepare_glob_pattern(const char *str) {
     size_t len = strlen(str);
-    char *res = xmalloc(len * 2 + 1);
+    char *res = mem_stack_alloc(len * 2 + 1);
     size_t res_idx = 0;
     int in_single = 0;
     int in_double = 0;
@@ -958,34 +975,15 @@ static int execute_simple_command(ASTNode *node) {
 
 
 
-    // Debug trace
-    if (node->data.command.args && node->data.command.args[0]) {
-        FILE *f = fopen("/tmp/posish_debug.log", "a");
-        if (f) {
-            fprintf(f, "DEBUG: executing command: %s\n", node->data.command.args[0]);
-            fclose(f);
-        }
-    } else if (node->data.command.assignment_count > 0) {
-        FILE *f = fopen("/tmp/posish_debug.log", "a");
-        if (f) {
-            fprintf(f, "DEBUG: executing assignment\n");
-            fclose(f);
-        }
-    }
+
     
     for (size_t i = 0; i < node->data.command.assignment_count; i++) {
         char *expanded_val = expand_word(node->data.command.assignments[i].value);
         var_set(node->data.command.assignments[i].name, expanded_val);
-        free(expanded_val);
+        // No free needed for expanded_val
     }
     
-    if (node->data.command.assignment_count > 0) {
-        FILE *f = fopen("/tmp/posish_debug.log", "a");
-        if (f) {
-            fprintf(f, "DEBUG: assignment loop finished\n");
-            fclose(f);
-        }
-    }
+
 
     if (node->data.command.arg_count == 0) {
         return 0;
@@ -1007,25 +1005,25 @@ static int execute_simple_command(ASTNode *node) {
                 int flags = GLOB_NOCHECK; 
                 
                 if (glob(pattern, flags, NULL, &glob_result) == 0) {
-                    argv = xrealloc(argv, (argc + glob_result.gl_pathc + 1) * sizeof(char *));
+                    argv = mem_stack_realloc_array(argv, argc * sizeof(char*), (argc + glob_result.gl_pathc + 1) * sizeof(char *), 1);
                     for (size_t j = 0; j < glob_result.gl_pathc; j++) {
-                        argv[argc++] = xstrdup(glob_result.gl_pathv[j]);
+                        argv[argc++] = mem_stack_strdup(glob_result.gl_pathv[j]);
                     }
                     globfree(&glob_result);
                 } else {
-                    argv = xrealloc(argv, (argc + 2) * sizeof(char *));
+                    argv = mem_stack_realloc_array(argv, argc * sizeof(char*), (argc + 2) * sizeof(char *), 1);
                     argv[argc++] = expanded;
                     expanded = NULL;
                 }
-                free(pattern);
+                // No free needed for pattern
             } else {
-                argv = xrealloc(argv, (argc + 2) * sizeof(char *));
+                argv = mem_stack_realloc_array(argv, argc * sizeof(char*), (argc + 2) * sizeof(char *), 1);
                 argv[argc++] = expanded;
                 expanded = NULL;
             }
-            if (expanded) free(expanded);
+            // No free needed for expanded
         }
-        free(expanded_list);
+        // No free needed for expanded_list
     }
     argv[argc] = NULL;
 
@@ -1033,7 +1031,7 @@ static int execute_simple_command(ASTNode *node) {
     if (shell_trace_mode && argv[0]) {
         char *ps4 = var_get("PS4");
         fprintf(stderr, "%s", ps4 ? ps4 : "+ ");
-        if (ps4) free(ps4);
+        if (ps4) free(ps4); // var_get returns malloced string
         
         for (size_t i = 0; i < argc; i++) {
             if (i > 0) fprintf(stderr, " ");
@@ -1049,8 +1047,7 @@ static int execute_simple_command(ASTNode *node) {
         int saved_stderr = dup(STDERR_FILENO);
 
         if (handle_redirections(node->data.command.redirections, node->data.command.redirection_count) != 0) {
-            for (size_t i = 0; i < argc; i++) free(argv[i]);
-            free(argv);
+            // No free needed for argv
             dup2(saved_stdin, STDIN_FILENO);
             dup2(saved_stdout, STDOUT_FILENO);
             dup2(saved_stderr, STDERR_FILENO);
@@ -1095,8 +1092,8 @@ static int execute_simple_command(ASTNode *node) {
         close(saved_stdout);
         close(saved_stderr);
 
-        for (size_t i = 0; i < argc; i++) free(argv[i]);
-        free(argv);
+        // for (size_t i = 0; i < argc; i++) free(argv[i]);
+        // free(argv);
         return status;
     }
 
@@ -1112,8 +1109,7 @@ static int execute_simple_command(ASTNode *node) {
         }
 
         if (handle_redirections(node->data.command.redirections, node->data.command.redirection_count) != 0) {
-            for (size_t i = 0; i < argc; i++) free(argv[i]);
-            free(argv);
+            // No free needed for argv
             
             if (!is_exec_no_args) {
                 dup2(saved_stdin, STDIN_FILENO);
@@ -1137,16 +1133,15 @@ static int execute_simple_command(ASTNode *node) {
             close(saved_stderr);
         }
 
-        for (size_t i = 0; i < argc; i++) free(argv[i]);
-        free(argv);
+        // for (size_t i = 0; i < argc; i++) free(argv[i]);
+        // free(argv);
         return status;
     }
 
     char *executable = find_executable(argv[0]);
     if (!executable) {
         error_msg("%s: not found", argv[0]);
-        for (size_t i = 0; i < argc; i++) free(argv[i]);
-        free(argv);
+        // No free needed for argv
         return 127;
     }
 
@@ -1169,9 +1164,7 @@ static int execute_simple_command(ASTNode *node) {
         exit(126);
     } else if (pid < 0) {
         error_sys("fork");
-        free(executable);
-        for (size_t i = 0; i < argc; i++) free(argv[i]);
-        free(argv);
+        // No free needed for executable, argv
         return 1;
     }
 
@@ -1181,9 +1174,7 @@ static int execute_simple_command(ASTNode *node) {
     
     int status = job_wait(j);
     
-    free(executable);
-    for (size_t i = 0; i < argc; i++) free(argv[i]);
-    free(argv);
+    // No free needed for executable, argv
 
     if (WIFEXITED(status)) {
         return WEXITSTATUS(status);
@@ -1232,11 +1223,7 @@ static int execute_pipeline(ASTNode *node) {
 static int execute_list(ASTNode *node) {
     int status = 0;
     
-    FILE *f = fopen("/tmp/posish_debug.log", "a");
-    if (f) {
-        fprintf(f, "DEBUG: execute_list enter\n");
-        fclose(f);
-    }
+
 
     if (node->data.list.left) {
         if (node->data.list.async) {
@@ -1262,18 +1249,10 @@ static int execute_list(ASTNode *node) {
     }
     
     if (node->data.list.right) {
-        f = fopen("/tmp/posish_debug.log", "a");
-        if (f) {
-            fprintf(f, "DEBUG: execute_list executing right\n");
-            fclose(f);
-        }
+
         status = executor_execute(node->data.list.right);
     } else {
-        f = fopen("/tmp/posish_debug.log", "a");
-        if (f) {
-            fprintf(f, "DEBUG: execute_list no right node\n");
-            fclose(f);
-        }
+
     }
     
     return status;
@@ -1296,33 +1275,33 @@ static int execute_for(ASTNode *node) {
                         int flags = GLOB_NOCHECK;
                         
                         if (glob(pattern, flags, NULL, &glob_result) == 0) {
-                            items = xrealloc(items, (item_count + glob_result.gl_pathc) * sizeof(char *));
+                            items = mem_stack_realloc_array(items, item_count * sizeof(char*), (item_count + glob_result.gl_pathc) * sizeof(char *), 1);
                             for (size_t j = 0; j < glob_result.gl_pathc; j++) {
-                                items[item_count++] = xstrdup(glob_result.gl_pathv[j]);
+                                items[item_count++] = mem_stack_strdup(glob_result.gl_pathv[j]);
                             }
                             globfree(&glob_result);
                         } else {
-                            items = xrealloc(items, (item_count + 1) * sizeof(char *));
+                            items = mem_stack_realloc_array(items, item_count * sizeof(char*), (item_count + 1) * sizeof(char *), 1);
                             items[item_count++] = expanded;
                             expanded = NULL;
                         }
-                        free(pattern);
+                        // No free needed for pattern
                     } else {
-                        items = xrealloc(items, (item_count + 1) * sizeof(char *));
+                        items = mem_stack_realloc_array(items, item_count * sizeof(char*), (item_count + 1) * sizeof(char *), 1);
                         items[item_count++] = expanded;
                         expanded = NULL;
                     }
-                    if (expanded) free(expanded);
+                    // No free needed for expanded
                 }
-                free(expanded_list);
+                // No free needed for expanded_list
             }
         }
     } else {
         char **args = var_get_all_positional();
         if (args) {
             for (int i = 0; args[i] != NULL; i++) {
-                items = xrealloc(items, (item_count + 1) * sizeof(char *));
-                items[item_count++] = xstrdup(args[i]);
+                items = mem_stack_realloc_array(items, item_count * sizeof(char*), (item_count + 1) * sizeof(char *), 1);
+                items[item_count++] = mem_stack_strdup(args[i]);
                 free(args[i]);
             }
             free(args);
@@ -1331,6 +1310,9 @@ static int execute_for(ASTNode *node) {
     
     int status = 0;
     for (size_t i = 0; i < item_count; i++) {
+        struct stackmark smark;
+        mem_stack_push_mark(&smark);
+        
         signal_check_pending();
         var_set(node->data.for_loop.var_name, items[i]);
         if (node->data.for_loop.body) {
@@ -1338,24 +1320,30 @@ static int execute_for(ASTNode *node) {
             if (status == EXIT_BREAK) {
                 if (executor_break_count > 1) {
                     executor_break_count--;
+                    mem_stack_pop_mark(&smark);
                     return EXIT_BREAK;
                 }
                 status = 0;
+                mem_stack_pop_mark(&smark);
                 break;
             } else if (status == EXIT_CONTINUE) {
                 if (executor_continue_count > 1) {
                     executor_continue_count--;
+                    mem_stack_pop_mark(&smark);
                     return EXIT_CONTINUE;
                 }
                 status = 0;
+                mem_stack_pop_mark(&smark);
                 continue;
             } else if (status == EXIT_RETURN) {
+                mem_stack_pop_mark(&smark);
                 break;
             }
         }
-        free(items[i]);
+        mem_stack_pop_mark(&smark);
+        // free(items[i]); // No free needed
     }
-    if (items) free(items);
+    // if (items) free(items); // No free needed
     
     return status;
 }
@@ -1379,32 +1367,44 @@ static int execute_if(ASTNode *node) {
 static int execute_while(ASTNode *node) {
     int status = 0;
     while (1) {
+        struct stackmark smark;
+        mem_stack_push_mark(&smark);
+
         signal_check_pending();
         int old_ignore = shell_ignore_errexit;
         shell_ignore_errexit = 1;
         int cond_status = executor_execute(node->data.while_loop.condition);
         shell_ignore_errexit = old_ignore;
         
-        if (cond_status != 0) break;
+        if (cond_status != 0) {
+            mem_stack_pop_mark(&smark);
+            break;
+        }
         
         status = executor_execute(node->data.while_loop.body);
         if (status == EXIT_BREAK) {
             if (executor_break_count > 1) {
                 executor_break_count--;
+                mem_stack_pop_mark(&smark);
                 return EXIT_BREAK;
             }
             status = 0;
+            mem_stack_pop_mark(&smark);
             break;
         } else if (status == EXIT_CONTINUE) {
             if (executor_continue_count > 1) {
                 executor_continue_count--;
+                mem_stack_pop_mark(&smark);
                 return EXIT_CONTINUE;
             }
             status = 0;
+            mem_stack_pop_mark(&smark);
             continue;
         } else if (status == EXIT_RETURN) {
+            mem_stack_pop_mark(&smark);
             return status;
         }
+        mem_stack_pop_mark(&smark);
     }
     return status;
 }
@@ -1412,31 +1412,44 @@ static int execute_while(ASTNode *node) {
 static int execute_until(ASTNode *node) {
     int status = 0;
     while (1) {
+        struct stackmark smark;
+        mem_stack_push_mark(&smark);
+
         signal_check_pending();
         int old_ignore = shell_ignore_errexit;
         shell_ignore_errexit = 1;
         int cond_status = executor_execute(node->data.until_loop.condition);
         shell_ignore_errexit = old_ignore;
-        if (cond_status == 0) break;
+        
+        if (cond_status == 0) {
+            mem_stack_pop_mark(&smark);
+            break;
+        }
         
         status = executor_execute(node->data.until_loop.body);
         if (status == EXIT_BREAK) {
             if (executor_break_count > 1) {
                 executor_break_count--;
+                mem_stack_pop_mark(&smark);
                 return EXIT_BREAK;
             }
             status = 0;
+            mem_stack_pop_mark(&smark);
             break;
         } else if (status == EXIT_CONTINUE) {
             if (executor_continue_count > 1) {
                 executor_continue_count--;
+                mem_stack_pop_mark(&smark);
                 return EXIT_CONTINUE;
             }
             status = 0;
+            mem_stack_pop_mark(&smark);
             continue;
         } else if (status == EXIT_RETURN) {
-            return status;
+            mem_stack_pop_mark(&smark);
+            return EXIT_RETURN;
         }
+        mem_stack_pop_mark(&smark);
     }
     return status;
 }
@@ -1475,10 +1488,10 @@ static int execute_case(ASTNode *node) {
                 
                 if (fnmatch(pattern, word, 0) == 0) {
                     matched = 1;
-                    free(pattern);
+                    // free(pattern); // No free needed
                     break;
                 }
-                free(pattern);
+                // free(pattern); // No free needed
             }
         }
         
@@ -1490,7 +1503,7 @@ static int execute_case(ASTNode *node) {
         }
     }
     
-    free(word);
+    // free(word); // No free needed
     return status;
 }
 
@@ -1499,7 +1512,7 @@ static int execute_group(ASTNode *node) {
 }
 
 static int execute_function_def(ASTNode *node) {
-    ASTNode *body_copy = ast_copy(node->data.function.body);
+    ASTNode *body_copy = ast_clone_to_heap(node->data.function.body);
     func_add(node->data.function.name, body_copy);
     return 0;
 }

@@ -5,8 +5,11 @@
 #include <string.h>
 
 int builtin_is_builtin(const char *name) {
-    if (strcmp(name, "cd") == 0) return 1;
+    if (strcmp(name, ":") == 0) return 1;
+    if (strcmp(name, "true") == 0) return 1;
+    if (strcmp(name, "false") == 0) return 1;
     if (strcmp(name, "echo") == 0) return 1;
+    if (strcmp(name, "cd") == 0) return 1;
     if (strcmp(name, "exit") == 0) return 1;
     if (strcmp(name, "export") == 0) return 1;
     if (strcmp(name, "unset") == 0) return 1;
@@ -37,10 +40,6 @@ int builtin_is_builtin(const char *name) {
     if (strcmp(name, "command") == 0) return 1;
     if (strcmp(name, "readonly") == 0) return 1;
     if (strcmp(name, "getopts") == 0) return 1;
-    if (strcmp(name, ":") == 0) return 1;
-    if (strcmp(name, "true") == 0) return 1;
-    if (strcmp(name, "false") == 0) return 1;
-    if (strcmp(name, "false") == 0) return 1;
     if (strcmp(name, "local") == 0) return 1;
     if (strcmp(name, "typeset") == 0) return 1;
     return 0;
@@ -62,8 +61,11 @@ int builtin_local(char **argv);
 int builtin_typeset(char **argv);
 
 int builtin_run(char **args) {
-    if (strcmp(args[0], "cd") == 0) return builtin_cd(args);
+    if (strcmp(args[0], ":") == 0) return builtin_colon(args);
+    if (strcmp(args[0], "true") == 0) return builtin_true(args);
+    if (strcmp(args[0], "false") == 0) return builtin_false(args);
     if (strcmp(args[0], "echo") == 0) return builtin_echo(args);
+    if (strcmp(args[0], "cd") == 0) return builtin_cd(args);
     if (strcmp(args[0], "exit") == 0) return builtin_exit(args);
     if (strcmp(args[0], "export") == 0) return builtin_export(args);
     if (strcmp(args[0], "unset") == 0) return builtin_unset(args);
@@ -94,9 +96,6 @@ int builtin_run(char **args) {
     if (strcmp(args[0], "command") == 0) return builtin_command(args);
     if (strcmp(args[0], "readonly") == 0) return builtin_readonly(args);
     if (strcmp(args[0], "getopts") == 0) return builtin_getopts(args);
-    if (strcmp(args[0], ":") == 0) return builtin_colon(args);
-    if (strcmp(args[0], "true") == 0) return builtin_true(args);
-    if (strcmp(args[0], "false") == 0) return builtin_false(args);
     if (strcmp(args[0], "local") == 0) return builtin_local(args);
     if (strcmp(args[0], "typeset") == 0) return builtin_typeset(args);
     return 1;

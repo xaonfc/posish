@@ -8,6 +8,7 @@
 #include <sys/stat.h>
 #include "error.h"
 #include "memalloc.h"
+#include "mem_stack.h"
 #include "builtins.h"
 #include "lexer.h"
 #include "parser.h"
@@ -81,7 +82,7 @@ int builtin_dot(char **args) {
     long file_size = ftell(file);
     fseek(file, 0, SEEK_SET);
     
-    char *content = xmalloc(file_size + 1);
+    char *content = mem_stack_alloc(file_size + 1);
     if (!content) {
         fclose(file);
         free(filepath);
@@ -97,14 +98,19 @@ int builtin_dot(char **args) {
     Lexer lexer;
     lexer_init(&lexer, content);
     
+    struct stackmark smark;
+    mem_stack_push_mark(&smark);
+    
     ASTNode *ast = parser_parse(&lexer);
     
     int status = 0;
     if (ast) {
         status = executor_execute(ast);
-        ast_free(ast);
+        // ast_free(ast); // No-op
     }
     
-    free(content);
+    mem_stack_pop_mark(&smark);
+    
+    // No free needed for content
     return status;
 }

@@ -24,7 +24,7 @@ int builtin_cd(char **argv) {
     if (!new_dir) {
         new_dir = var_get("HOME");
         if (!new_dir) {
-            fprintf(stderr, "cd: HOME not set\n");
+            error_msg("cd: HOME not set");
             return 1;
         }
     }
@@ -33,7 +33,7 @@ int builtin_cd(char **argv) {
     if (strcmp(new_dir, "-") == 0) {
         char *oldpwd = var_get("OLDPWD");
         if (!oldpwd || !*oldpwd) {
-            fprintf(stderr, "cd: OLDPWD not set\n");
+            error_msg("cd: OLDPWD not set");
             return 1;
         }
         new_dir = oldpwd;
@@ -41,7 +41,8 @@ int builtin_cd(char **argv) {
     }
     
     if (chdir(new_dir) != 0) {
-        perror("cd");
+        // Match dash behavior: "cd: can't cd to <dir>" without errno reason
+        error_msg("cd: can't cd to %s", new_dir);
         return 1;
     }
     

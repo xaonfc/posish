@@ -6,7 +6,10 @@
 #include <string.h>
 #include <ctype.h>
 #include <stdio.h>
+#include <stdio.h>
 #include "memalloc.h"
+#include "alias.h"
+#include "mem_stack.h"
 
 // Simple operators for now. POSIX defines more (&&, ||, ;;, <<, >>, <&, >&, <>, <<-, >|)
 static const char *OPERATORS[] = {
@@ -19,6 +22,7 @@ void lexer_init(Lexer *lexer, const char *input) {
     lexer->pos = 0;
     lexer->len = strlen(input);
     lexer->current_line = 1;
+    lexer->last_token_type = TOKEN_NEWLINE; // Start as if after newline
 }
 
 void free_token(Token token) {
@@ -69,6 +73,13 @@ static void lexer_advance(Lexer *lexer) {
 Token lexer_next_token(Lexer *lexer) {
     Token token = {TOKEN_EOF, NULL, lexer->current_line};
     
+    // Alias expansion check
+    // Only expand if previous token was a separator that allows command start
+    int allow_alias = (lexer->last_token_type == TOKEN_NEWLINE || 
+                       lexer->last_token_type == TOKEN_OPERATOR || 
+                       lexer->last_token_type == TOKEN_KEYWORD); 
+                       // Simplified check. Ideally check specific operators (; | && || ( {)
+    
     while (lexer->pos < lexer->len && isspace(lexer->input[lexer->pos]) && lexer->input[lexer->pos] != '\n') {
         lexer_advance(lexer);
     }
@@ -80,10 +91,12 @@ Token lexer_next_token(Lexer *lexer) {
     char c = lexer->input[lexer->pos];
 
     int op_len = match_operator(lexer->input + lexer->pos);
-    if (op_len > 0) {        if (lexer->input[lexer->pos] == '\n') {
+    if (op_len > 0) {
+        if (lexer->input[lexer->pos] == '\n') {
             token.type = TOKEN_NEWLINE;
             token.value = (char*)"\n"; // Static string, no allocation
             lexer_advance(lexer);
+            lexer->last_token_type = TOKEN_NEWLINE;
             return token;
         }
 
@@ -93,6 +106,7 @@ Token lexer_next_token(Lexer *lexer) {
             if (strncmp(lexer->input + lexer->pos, OPERATORS[i], op_len) == 0 && strlen(OPERATORS[i]) == (size_t)op_len) {
                 token.value = (char*)OPERATORS[i]; // Static string, no allocation
                 for (int k=0; k<op_len; k++) lexer_advance(lexer);
+                lexer->last_token_type = TOKEN_OPERATOR;
                 return token;
             }
         }
@@ -321,6 +335,42 @@ Token lexer_next_token(Lexer *lexer) {
         }
     }
 
+    // Check for alias expansion if it's a simple word
+    if (allow_alias && token.type == TOKEN_WORD) {
+        char *alias_val = alias_get(token.value);
+        if (alias_val) {
+            // Found alias!
+            // Construct new input: alias_val + " " + remaining_input
+            // We use mem_stack for this new string
+            
+            const char *remaining = lexer->input + lexer->pos;
+            size_t alias_len = strlen(alias_val);
+            size_t rem_len = strlen(remaining);
+            
+            // Need space for alias + space + remaining + null
+            // But wait, if alias ends with space, it allows next word alias expansion.
+            // For now, just simple concatenation.
+            
+            char *new_input = mem_stack_alloc(alias_len + 1 + rem_len + 1);
+            strcpy(new_input, alias_val);
+            strcat(new_input, " "); // Add space to separate
+            strcat(new_input, remaining);
+            
+            // Update lexer to point to new input
+            lexer->input = new_input;
+            lexer->len = strlen(new_input);
+            lexer->pos = 0;
+            
+            // Free the token value we just read (it was malloc'd)
+            free(token.value);
+            free(alias_val); // alias_get returns a copy
+            
+            // Recurse to parse the expanded alias
+            return lexer_next_token(lexer);
+        }
+    }
+
+    lexer->last_token_type = token.type;
     return token;
 }
 

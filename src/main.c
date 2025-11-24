@@ -192,7 +192,14 @@ static int run_script_file(const char *filename) {
 static int try_fast_command(const char *cmd) {
     // Skip whitespace
     while (*cmd && (*cmd == ' ' || *cmd == '\t')) cmd++;
-    if (!*cmd || *cmd == '#') return 1;
+    if (!*cmd) return 1;
+    if (*cmd == '#') {
+        // If it's a comment, check if there's a newline.
+        // If there's a newline, we must parse the rest.
+        // If no newline, it's just a comment line, so we are done.
+        if (strchr(cmd, '\n')) return 0; // Let parser handle multi-line
+        return 1; // Just a comment
+    }
     
     // Fast-path: Simple assignment (VAR=value)
     // But reject if there's a semicolon (compound command)

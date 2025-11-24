@@ -398,6 +398,19 @@ char **var_get_positional_params(size_t *count) {
     return args;
 }
 
+// Zero-copy save/restore for function calls (FreeBSD sh style)
+PositionalSave var_save_positional_fast(void) {
+    PositionalSave save;
+    save.args = positional_args;
+    save.count = positional_count;
+    return save;
+}
+
+void var_restore_positional_fast(PositionalSave save) {
+    positional_args = save.args;
+    positional_count = save.count;
+}
+
 static pid_t last_bg_pid = -1;
 static char *shell_name = "posish";
 

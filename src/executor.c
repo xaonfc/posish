@@ -1042,11 +1042,17 @@ static int execute_simple_command(ASTNode *node) {
 
     ASTNode *func_body = func_get(argv[0]);
     if (func_body) {
-        int saved_stdin = dup(STDIN_FILENO);
-        int saved_stdout = dup(STDOUT_FILENO);
-        int saved_stderr = dup(STDERR_FILENO);
+        int has_redirections = (node->data.command.redirection_count > 0);
+        int saved_stdin = -1, saved_stdout = -1, saved_stderr = -1;
 
-        if (handle_redirections(node->data.command.redirections, node->data.command.redirection_count) != 0) {
+        // Only save FDs if we have redirections
+        if (has_redirections) {
+            saved_stdin = dup(STDIN_FILENO);
+            saved_stdout = dup(STDOUT_FILENO);
+            saved_stderr = dup(STDERR_FILENO);
+        }
+
+        if (has_redirections && handle_redirections(node->data.command.redirections, node->data.command.redirection_count) != 0) {
             // No free needed for argv
             dup2(saved_stdin, STDIN_FILENO);
             dup2(saved_stdout, STDOUT_FILENO);
@@ -1057,8 +1063,8 @@ static int execute_simple_command(ASTNode *node) {
             return 1;
         }
 
-        int old_count = var_get_positional_count();
-        char **old_params = var_get_all_positional();
+        // Zero-copy save (just swap pointers)
+        PositionalSave saved_params = var_save_positional_fast();
 
         if (argc > 1) {
             var_set_positional(argc - 1, argv + 1);
@@ -1078,19 +1084,18 @@ static int execute_simple_command(ASTNode *node) {
             status = func_return_status;
         }
         
-        var_set_positional(old_count, old_params);
-        
-        if (old_params) {
-            for (int i = 0; i < old_count; i++) free(old_params[i]);
-            free(old_params);
-        }
+        // Zero-copy restore (just swap back)
+        var_restore_positional_fast(saved_params);
 
-        dup2(saved_stdin, STDIN_FILENO);
-        dup2(saved_stdout, STDOUT_FILENO);
-        dup2(saved_stderr, STDERR_FILENO);
-        close(saved_stdin);
-        close(saved_stdout);
-        close(saved_stderr);
+        // Only restore FDs if we saved them
+        if (has_redirections) {
+            dup2(saved_stdin, STDIN_FILENO);
+            dup2(saved_stdout, STDOUT_FILENO);
+            dup2(saved_stderr, STDERR_FILENO);
+            close(saved_stdin);
+            close(saved_stdout);
+            close(saved_stderr);
+        }
 
         // for (size_t i = 0; i < argc; i++) free(argv[i]);
         // free(argv);

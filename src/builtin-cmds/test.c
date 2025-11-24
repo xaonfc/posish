@@ -213,9 +213,19 @@ int builtin_test(char **args) {
         return (strlen(argv[0]) > 0) ? 0 : 1;
     }
     
+    
     if (count == 3) {
+        // Fast path for common string comparison: [ str1 = str2 ] or [ str1 != str2 ]
+        char *op = argv[1];
+        if (op[0] == '=' && op[1] == '\0') {
+            return (strcmp(argv[0], argv[2]) == 0) ? 0 : 1;
+        }
+        if (op[0] == '!' && op[1] == '=' && op[2] == '\0') {
+            return (strcmp(argv[0], argv[2]) != 0) ? 0 : 1;
+        }
+        
         // Binary test or ! unary or ( expr )
-        if (is_binary_op(argv[1])) {
+        if (is_binary_op(op)) {
             int pos = 0;
             int result = eval_primary(argv, &pos, count);
             return result ? 0 : 1;

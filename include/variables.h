@@ -27,6 +27,15 @@ char **var_get_all_positional(void);
 int var_shift_positional(int n);
 char **var_get_positional_params(size_t *count);
 
+typedef struct {
+    char **args;
+    int count;
+} PositionalSave;
+
+PositionalSave var_save_positional_fast(void);
+void var_restore_positional_fast(PositionalSave save);
+
+
 void var_set_last_bg_pid(pid_t pid);
 pid_t var_get_last_bg_pid(void);
 void var_set_shell_name(const char *name);

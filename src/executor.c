@@ -1099,19 +1099,21 @@ static int execute_simple_command(ASTNode *node) {
 
     if (builtin_is_builtin(argv[0])) {
         int is_exec_no_args = (strcmp(argv[0], "exec") == 0 && argc == 1);
+        int has_redirections = (node->data.command.redirection_count > 0);
         
         int saved_stdin = -1, saved_stdout = -1, saved_stderr = -1;
         
-        if (!is_exec_no_args) {
+        // Only save FDs if we have redirections or exec command
+        if (!is_exec_no_args && has_redirections) {
             saved_stdin = dup(STDIN_FILENO);
             saved_stdout = dup(STDOUT_FILENO);
             saved_stderr = dup(STDERR_FILENO);
         }
 
-        if (handle_redirections(node->data.command.redirections, node->data.command.redirection_count) != 0) {
+        if (has_redirections && handle_redirections(node->data.command.redirections, node->data.command.redirection_count) != 0) {
             // No free needed for argv
             
-            if (!is_exec_no_args) {
+            if (!is_exec_no_args && has_redirections) {
                 dup2(saved_stdin, STDIN_FILENO);
                 dup2(saved_stdout, STDOUT_FILENO);
                 dup2(saved_stderr, STDERR_FILENO);
@@ -1124,7 +1126,8 @@ static int execute_simple_command(ASTNode *node) {
 
         int status = builtin_run(argv);
         
-        if (!is_exec_no_args) {
+        // Only restore FDs if we saved them
+        if (!is_exec_no_args && has_redirections) {
             dup2(saved_stdin, STDIN_FILENO);
             dup2(saved_stdout, STDOUT_FILENO);
             dup2(saved_stderr, STDERR_FILENO);

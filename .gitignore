@@ -31,3 +31,8 @@ test_output/
 *.bak
 *.orig
 
+
+# testing
+dash
+freebsd-sh
+shellbench

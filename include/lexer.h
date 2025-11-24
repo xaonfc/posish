@@ -27,6 +27,7 @@ typedef struct {
     size_t pos;
     size_t len;
     int current_line; // Current line number
+    TokenType last_token_type; // For alias expansion context
 } Lexer;
 
 void lexer_init(Lexer *lexer, const char *input);

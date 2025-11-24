@@ -445,6 +445,18 @@ void var_pop_scope(void) {
     Scope *old_scope = current_scope;
     current_scope = old_scope->parent;
     
+    // Invalidate entire cache when popping scope to avoid stale references
+    for (int i = 0; i < VAR_CACHE_SIZE; i++) {
+        if (var_cache[i].last_name) {
+            free(var_cache[i].last_name);
+            free(var_cache[i].value);
+            var_cache[i].last_name = NULL;
+            var_cache[i].value = NULL;
+            var_cache[i].name = NULL;
+            var_cache[i].scope = NULL;
+        }
+    }
+    
     // Free all variables in the old scope
     for (int i = 0; i < HASH_SIZE; i++) {
         Variable *v = old_scope->vars[i];

@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <errno.h>
+#include <sys/wait.h>
 #include "builtins.h"
 #include "variables.h"
 
@@ -87,8 +89,63 @@ int builtin_command(char **argv) {
     }
     
     // Execute command (bypassing functions)
-    // For now, just note that executor needs to skip function lookup
-    // This would require modifying executor.c to check for COMMAND_BYPASS flag
-    fprintf(stderr, "command: execution mode not fully implemented\n");
-    return 1;
+    // First check if it's a builtin
+    if (builtin_is_builtin(cmd_name)) {
+        // Execute the builtin directly
+        return builtin_run(argv + arg_idx);
+    }
+    
+    // Not a builtin, search for external command
+    char *path = use_default_path ? "/usr/bin:/bin" : var_get("PATH");
+    if (!path) {
+        fprintf(stderr, "command: %s: not found\n", cmd_name);
+        return 127;
+    }
+    
+    char *executable = NULL;
+    char *path_copy = strdup(path);
+    char *dir = strtok(path_copy, ":");
+    
+    while (dir) {
+        char full_path[1024];
+        snprintf(full_path, sizeof(full_path), "%s/%s", dir, cmd_name);
+        
+        if (access(full_path, X_OK) == 0) {
+            executable = strdup(full_path);
+            break;
+        }
+        
+        dir = strtok(NULL, ":");
+    }
+    
+    free(path_copy);
+    if (!use_default_path && path) free(path);
+    
+    if (!executable) {
+        fprintf(stderr, "command: %s: not found\n", cmd_name);
+        return 127;
+    }
+    
+    // Execute the external command
+    pid_t pid = fork();
+    if (pid == 0) {
+        // Child process
+        execv(executable, argv + arg_idx);
+        fprintf(stderr, "command: %s: %s\n", executable, strerror(errno));
+        exit(126);
+    } else if (pid > 0) {
+        // Parent process  
+        int status;
+        waitpid(pid, &status, 0);
+        free(executable);
+        if (WIFEXITED(status)) {
+            return WEXITSTATUS(status);
+        }
+        return 1;
+    } else {
+        // Fork failed
+        free(executable);
+        fprintf(stderr, "command: fork failed\n");
+        return 1;
+    }
 }

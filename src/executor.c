@@ -621,11 +621,37 @@ static char **expand_word_internal(const char *word, int allow_split) {
                     strncpy(var_name, input + start, var_len);
                     var_name[var_len] = '\0';
                     
-                    // Check for pattern removal operators
+                    
+                    // Check for parameter expansion modifiers
+                    char *default_value = NULL;
+                    int colon_op = 0; // 0=none, 1=:-, 2=:+, 3=:=, 4=:?
                     char *pattern = NULL;
                     int pattern_op = 0; // 0=none, 1=%, 2=%%, 3=#, 4=##
                     
-                    if (i < len && (input[i] == '%' || input[i] == '#')) {
+                    if (i < len && input[i] == ':') {
+                        i++; // Skip ':'
+                        if (i < len && (input[i] == '-' || input[i] == '+' || input[i] == '=' || input[i] == '?')) {
+                            char op_char = input[i];
+                            i++; // Skip operator char
+                            
+                            // Map operator to colon_op
+                            if (op_char == '-') colon_op = 1;
+                            else if (op_char == '+') colon_op = 2;
+                            else if (op_char == '=') colon_op = 3;
+                            else if (op_char == '?') colon_op = 4;
+                            
+                            // Get the default value/message
+                            size_t val_start = i;
+                            while (i < len && input[i] != '}') i++;
+                            size_t val_len = i - val_start;
+                            default_value = mem_stack_alloc(val_len + 1);
+                            strncpy(default_value, input + val_start, val_len);
+                            default_value[val_len] = '\0';
+                        } else {
+                            // Just ':' without operator, skip to }
+                            while (i < len && input[i] != '}') i++;
+                        }
+                    } else if (i < len && (input[i] == '%' || input[i] == '#')) {
                         char op_char = input[i];
                         i++;
                         
@@ -645,7 +671,7 @@ static char **expand_word_internal(const char *word, int allow_split) {
                         strncpy(pattern, input + pat_start, pat_len);
                         pattern[pat_len] = '\0';
                     } else {
-                        // No pattern operator, skip to }
+                        // No operator, skip to }
                         while (i < len && input[i] != '}') i++;
                     }
                     
@@ -665,6 +691,42 @@ static char **expand_word_internal(const char *word, int allow_split) {
                         var_value = var_get_positional_value(atoi(var_name));
                     } else {
                         var_value = var_get_value(var_name);
+                    }
+                    
+                    // Handle colon operators
+                    if (colon_op) {
+                        int is_unset_or_null = (!var_value || var_value[0] == '\0');
+                        
+                        switch (colon_op) {
+                            case 1: // :- Use default if unset or null
+                                if (is_unset_or_null) {
+                                    char *expanded_default = expand_word(default_value);
+                                    var_value = expanded_default;
+                                }
+                                break;
+                            case 2: // :+ Use alternative if set and not null
+                                if (!is_unset_or_null) {
+                                    char *expanded_alt = expand_word(default_value);
+                                    var_value = expanded_alt;
+                                } else {
+                                    var_value = "";
+                                }
+                                break;
+                            case 3: // := Assign default if unset or null
+                                if (is_unset_or_null) {
+                                    char *expanded_default = expand_word(default_value);
+                                    var_set(var_name, expanded_default);
+                                    var_value = var_get_value(var_name);
+                                }
+                                break;
+                            case 4: // :? Error if unset or null
+                                if (is_unset_or_null) {
+                                    char *msg = default_value && default_value[0] ? default_value : "parameter null or not set";
+                                    error_msg("%s: %s", var_name, msg);
+                                    exit(1);
+                                }
+                                break;
+                        }
                     }
                     
                     // Apply pattern removal if needed
@@ -693,6 +755,7 @@ static char **expand_word_internal(const char *word, int allow_split) {
                         sb_append_str(&sb, var_value);
                     }
                     // if (pattern) free(pattern); // No free needed
+                    // if (default_value) free(default_value); // No free needed
                     free(var_name); // Free xmalloc'd var_name
                     var_name = NULL;
                     continue;
@@ -1006,6 +1069,11 @@ static int execute_simple_command(ASTNode *node) {
         for (int k = 0; expanded_list[k]; k++) {
             char *expanded = expanded_list[k];
             
+            // Skip empty expansions (POSIX: unquoted empty expansions are removed)
+            if (expanded[0] == '\0') {
+                continue;
+            }
+            
             if (has_glob_chars(expanded)) {
                 char *pattern = prepare_glob_pattern(expanded);
                 glob_t glob_result;
@@ -1032,7 +1100,12 @@ static int execute_simple_command(ASTNode *node) {
         }
         // No free needed for expanded_list
     }
-    argv[argc] = NULL;
+    if (argv) argv[argc] = NULL;
+
+    // Empty command after expansion (all words expanded to nothing)
+    if (argc == 0) {
+        return 0;
+    }
 
     // Trace mode (set -x) - Print expanded command
     if (shell_trace_mode && argv[0]) {

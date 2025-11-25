@@ -34,5 +34,4 @@ test_output/
 
 # testing
 tests/__pycache__
-freebsd-sh
 

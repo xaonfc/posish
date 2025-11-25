@@ -26,13 +26,16 @@ int builtin_eval(char **argv) {
     
     char *command = mem_stack_alloc(total_len);
     
-    command[0] = '\0';
+    size_t offset = 0;
     for (int i = 1; argv[i]; i++) {
         if (i > 1) {
-            strcat(command, " ");
+            command[offset++] = ' ';
         }
-        strcat(command, argv[i]);
+        size_t arg_len = strlen(argv[i]);
+        memcpy(command + offset, argv[i], arg_len);
+        offset += arg_len;
     }
+    command[offset] = '\0';
     
     // Parse the command
     Lexer lexer;

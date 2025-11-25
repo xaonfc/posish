@@ -444,7 +444,7 @@ done_parsing_options:
                 if (home) {
                     size_t len = strlen(home) + strlen(env_var);
                     expanded_path = malloc(len + 1);
-                    sprintf(expanded_path, "%s%s", home, env_var + 1);
+                    snprintf(expanded_path, len + 1, "%s%s", home, env_var + 1);
                 }
             } else {
                 expanded_path = strdup(env_var);

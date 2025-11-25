@@ -352,9 +352,11 @@ Token lexer_next_token(Lexer *lexer) {
             // For now, just simple concatenation.
             
             char *new_input = mem_stack_alloc(alias_len + 1 + rem_len + 1);
-            strcpy(new_input, alias_val);
-            strcat(new_input, " "); // Add space to separate
-            strcat(new_input, remaining);
+            size_t offset = 0;
+            memcpy(new_input + offset, alias_val, alias_len);
+            offset += alias_len;
+            new_input[offset++] = ' ';
+            memcpy(new_input + offset, remaining, rem_len + 1); // +1 for null terminator
             
             // Update lexer to point to new input
             lexer->input = new_input;

@@ -36,3 +36,5 @@ test_output/
 dash
 freebsd-sh
 shellbench
+tests/__pycache__
+

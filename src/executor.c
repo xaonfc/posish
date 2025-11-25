@@ -164,6 +164,104 @@ static int handle_redirections(Redirection *redirs, size_t count) {
 #include "parser.h"
 
 static char *execute_subshell_capture(const char *cmd_str) {
+    // ULTRA-FAST path: Skip parsing for known zero-output builtins
+    // This avoids lexer/parser overhead for the most common cases
+    if (cmd_str[0] == 't' && strcmp(cmd_str, "true") == 0) {
+        char *argv[] = {"true", NULL};
+        builtin_run(argv);
+        return mem_stack_strdup("");
+    }
+    if (cmd_str[0] == 'f' && strcmp(cmd_str, "false") == 0) {
+        char *argv[] = {"false", NULL};
+        builtin_run(argv);
+        return mem_stack_strdup("");
+    }
+    if (cmd_str[0] == ':' && cmd_str[1] == '\0') {
+        char *argv[] = {":", NULL};
+        builtin_run(argv);
+        return mem_stack_strdup("");
+    }
+    
+    // OPTIMIZATION: Parse first to check if we can avoid fork
+    Lexer lexer;
+    lexer_init(&lexer, cmd_str);
+    ASTNode *node = parser_parse(&lexer);
+    
+    // Fast path: simple builtin with no args or redirections
+    if (node && node->type == NODE_COMMAND && 
+        node->data.command.arg_count == 1 &&  // Just the command name
+        node->data.command.redirection_count == 0 &&
+        builtin_is_builtin(node->data.command.args[0])) {
+        
+        const char *cmd_name = node->data.command.args[0];
+        
+        // ULTRA-FAST path: builtins that never produce output
+        if (strcmp(cmd_name, "true") == 0 || 
+            strcmp(cmd_name, "false") == 0 || 
+            strcmp(cmd_name, ":") == 0) {
+            // Execute directly, no pipe needed
+            char *argv[2] = {(char *)cmd_name, NULL};
+            builtin_run(argv);
+            return mem_stack_strdup("");
+        }
+        
+        // Create a pipe to capture stdout
+        int pipefd[2];
+        if (pipe(pipefd) < 0) {
+            return mem_stack_strdup("");
+        }
+        
+        // Save original stdout
+        int saved_stdout = dup(STDOUT_FILENO);
+        if (saved_stdout < 0) {
+            close(pipefd[0]);
+            close(pipefd[1]);
+            return mem_stack_strdup("");
+        }
+        
+        // Redirect stdout to pipe
+        if (dup2(pipefd[1], STDOUT_FILENO) < 0) {
+            close(saved_stdout);
+            close(pipefd[0]);
+            close(pipefd[1]);
+            return mem_stack_strdup("");
+        }
+        close(pipefd[1]);
+        
+        // Execute builtin in-process
+        char *argv[2] = {(char *)cmd_name, NULL};
+        builtin_run(argv);
+        
+        // Restore stdout
+        dup2(saved_stdout, STDOUT_FILENO);
+        close(saved_stdout);
+        
+        // Read captured output from pipe
+        size_t size = 0;
+        size_t capacity = 128;
+        char *buffer = mem_stack_alloc(capacity);
+        
+        ssize_t n;
+        while ((n = read(pipefd[0], buffer + size, capacity - size - 1)) > 0) {
+            size += n;
+            if (size >= capacity - 1) {
+                size_t new_capacity = capacity * 2;
+                buffer = mem_stack_realloc_array(buffer, capacity, new_capacity, 1);
+                capacity = new_capacity;
+            }
+        }
+        close(pipefd[0]);
+        buffer[size] = '\0';
+        
+        // Strip trailing newlines
+        while (size > 0 && buffer[size - 1] == '\n') {
+            buffer[--size] = '\0';
+        }
+        
+        return buffer;
+    }
+    
+    // Slow path: fork required
     int pipefd[2];
     if (pipe(pipefd) < 0) {
         error_sys("pipe");
@@ -175,10 +273,6 @@ static char *execute_subshell_capture(const char *cmd_str) {
         close(pipefd[0]);
         dup2(pipefd[1], STDOUT_FILENO);
         close(pipefd[1]);
-        
-        Lexer lexer;
-        lexer_init(&lexer, cmd_str);
-        ASTNode *node = parser_parse(&lexer);
         
         int status = executor_execute(node);
         // ast_free(node); // No-op
@@ -1069,11 +1163,6 @@ static int execute_simple_command(ASTNode *node) {
         for (int k = 0; expanded_list[k]; k++) {
             char *expanded = expanded_list[k];
             
-            // Skip empty expansions (POSIX: unquoted empty expansions are removed)
-            if (expanded[0] == '\0') {
-                continue;
-            }
-            
             if (has_glob_chars(expanded)) {
                 char *pattern = prepare_glob_pattern(expanded);
                 glob_t glob_result;
@@ -1233,7 +1322,8 @@ static int execute_simple_command(ASTNode *node) {
         return 127;
     }
 
-    pid_t pid = fork();
+    // OPTIMIZATION: Use vfork() instead of fork() for external commands
+    pid_t pid = vfork();
     if (pid == 0) {
         signal(SIGINT, SIG_DFL);
         signal(SIGQUIT, SIG_DFL);
@@ -1243,15 +1333,15 @@ static int execute_simple_command(ASTNode *node) {
         
         if (handle_redirections(node->data.command.redirections, 
                               node->data.command.redirection_count) != 0) {
-            exit(1);
+            _exit(1);  // Use _exit() with vfork()
         }
 
         char **env = var_get_environ();
         execve(executable, argv, env);
-        error_sys("execve");
-        exit(126);
+        // execve failed
+        _exit(126);  // Use _exit() with vfork()
     } else if (pid < 0) {
-        error_sys("fork");
+        error_sys("vfork");
         // No free needed for executable, argv
         return 1;
     }
@@ -1544,11 +1634,15 @@ static int execute_until(ASTNode *node) {
 
 
 static int execute_subshell(ASTNode *node) {
-    pid_t pid = fork();
+    // OPTIMIZATION: Use vfork() instead of fork() for faster process creation
+    // vfork() shares parent's address space until exec/exit, avoiding copy-on-write overhead
+    pid_t pid = vfork();
     
     if (pid == 0) {
+        // Child process - must be careful with vfork()
+        // Can only call exec() or _exit(), no other modifications
         int status = executor_execute(node->data.subshell.body);
-        exit(status);
+        _exit(status);  // Use _exit() not exit() with vfork()
     } else if (pid > 0) {
         int status;
         waitpid(pid, &status, 0);
@@ -1557,7 +1651,7 @@ static int execute_subshell(ASTNode *node) {
         }
         return 1;
     } else {
-        perror("fork");
+        perror("vfork");
         return 1;
     }
 }

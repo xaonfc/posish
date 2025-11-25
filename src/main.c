@@ -463,20 +463,23 @@ done_parsing_options:
     if (is_interactive) {
         // Interactive mode setup
         
-        // Put shell in its own process group
-        while (tcgetpgrp(STDIN_FILENO) != (getpgrp())) {
-            kill(-getpgrp(), SIGTTIN);
+        // Only attempt job control if we are attached to a terminal
+        if (isatty(STDIN_FILENO)) {
+            // Put shell in its own process group
+            while (tcgetpgrp(STDIN_FILENO) != (getpgrp())) {
+                kill(-getpgrp(), SIGTTIN);
+            }
+            
+            signal(SIGINT, SIG_IGN);
+            signal(SIGQUIT, SIG_IGN);
+            signal(SIGTSTP, SIG_IGN);
+            signal(SIGTTIN, SIG_IGN);
+            signal(SIGTTOU, SIG_IGN);
+            
+            pid_t pid = getpid();
+            setpgid(pid, pid);
+            tcsetpgrp(STDIN_FILENO, pid);
         }
-        
-        signal(SIGINT, SIG_IGN);
-        signal(SIGQUIT, SIG_IGN);
-        signal(SIGTSTP, SIG_IGN);
-        signal(SIGTTIN, SIG_IGN);
-        signal(SIGTTOU, SIG_IGN);
-        
-        pid_t pid = getpid();
-        setpgid(pid, pid);
-        tcsetpgrp(STDIN_FILENO, pid);
         
         // Initialize history
         const char *home = getenv("HOME");
@@ -498,19 +501,21 @@ done_parsing_options:
 
     while (1) {
         signal_check_pending();
-        char *prompt_str;
-        if (command_buffer) {
-            const char *ps2 = var_get("PS2");
-            if (!ps2) ps2 = "> ";
-            prompt_str = strdup(ps2);
-        } else {
-            const char *ps1 = var_get("PS1");
-            if (!ps1) ps1 = "posish$ "; // Default
-            prompt_str = expand_prompt(ps1);
+        char *prompt_str = NULL;
+        if (is_interactive) {
+            if (command_buffer) {
+                const char *ps2 = var_get("PS2");
+                if (!ps2) ps2 = "> ";
+                prompt_str = strdup(ps2);
+            } else {
+                const char *ps1 = var_get("PS1");
+                if (!ps1) ps1 = "posish$ "; // Default
+                prompt_str = expand_prompt(ps1);
+            }
         }
         
         char *line = read_line(prompt_str);
-        free(prompt_str);
+        if (prompt_str) free(prompt_str);
         
         if (!line) {
             if (command_buffer) {

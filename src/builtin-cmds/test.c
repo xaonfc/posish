@@ -1,267 +1,543 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
 
 
-#include <stdio.h>
+#include <sys/cdefs.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+
+#include <ctype.h>
+#include <errno.h>
+#include <inttypes.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <sys/stat.h>
-#include <ctype.h>
-#include "builtins.h"
-#include "error.h"
 
-// Forward declarations
-static int eval_expr(char **args, int *pos, int end);
-static int eval_or(char **args, int *pos, int end);
-static int eval_and(char **args, int *pos, int end);
-static int eval_primary(char **args, int *pos, int end);
+#include "bltin.h"
 
-// Check if string is a unary operator
-static int is_unary_op(const char *s) {
-    if (!s || s[0] != '-' || !s[1] || s[2]) return 0;
-    return strchr("bcdefghLnprSstuwxz", s[1]) != NULL;
+/* test(1) accepts the following grammar:
+	oexpr	::= aexpr | aexpr "-o" oexpr ;
+	aexpr	::= nexpr | nexpr "-a" aexpr ;
+	nexpr	::= primary | "!" primary
+	primary	::= unary-operator operand
+		| operand binary-operator operand
+		| operand
+		| "(" oexpr ")"
+		;
+	unary-operator ::= "-r"|"-w"|"-x"|"-f"|"-d"|"-c"|"-b"|"-p"|
+		"-u"|"-g"|"-k"|"-s"|"-t"|"-z"|"-n"|"-o"|"-O"|"-G"|"-L"|"-S";
+
+	binary-operator ::= "="|"!="|"-eq"|"-ne"|"-ge"|"-gt"|"-le"|"-lt"|
+			"-nt"|"-ot"|"-ef";
+	operand ::= <any legal UNIX file name>
+*/
+
+enum token_types {
+	UNOP = 0x100,
+	BINOP = 0x200,
+	BUNOP = 0x300,
+	BBINOP = 0x400,
+	PAREN = 0x500
+};
+
+enum token {
+	EOI,
+	OPERAND,
+	FILRD = UNOP + 1,
+	FILWR,
+	FILEX,
+	FILEXIST,
+	FILREG,
+	FILDIR,
+	FILCDEV,
+	FILBDEV,
+	FILFIFO,
+	FILSOCK,
+	FILSYM,
+	FILGZ,
+	FILTT,
+	FILSUID,
+	FILSGID,
+	FILSTCK,
+	STREZ,
+	STRNZ,
+	FILUID,
+	FILGID,
+	FILNT = BINOP + 1,
+	FILOT,
+	FILEQ,
+	STREQ,
+	STRNE,
+	STRLT,
+	STRGT,
+	INTEQ,
+	INTNE,
+	INTGE,
+	INTGT,
+	INTLE,
+	INTLT,
+	UNOT = BUNOP + 1,
+	BAND = BBINOP + 1,
+	BOR,
+	LPAREN = PAREN + 1,
+	RPAREN
+};
+
+#define TOKEN_TYPE(token) ((token) & 0xff00)
+
+static const struct t_op {
+	char op_text[2];
+	short op_num;
+} ops1[] = {
+	{"=",	STREQ},
+	{"<",	STRLT},
+	{">",	STRGT},
+	{"!",	UNOT},
+	{"(",	LPAREN},
+	{")",	RPAREN},
+}, opsm1[] = {
+	{"r",	FILRD},
+	{"w",	FILWR},
+	{"x",	FILEX},
+	{"e",	FILEXIST},
+	{"f",	FILREG},
+	{"d",	FILDIR},
+	{"c",	FILCDEV},
+	{"b",	FILBDEV},
+	{"p",	FILFIFO},
+	{"u",	FILSUID},
+	{"g",	FILSGID},
+	{"k",	FILSTCK},
+	{"s",	FILGZ},
+	{"t",	FILTT},
+	{"z",	STREZ},
+	{"n",	STRNZ},
+	{"h",	FILSYM},		/* for backwards compat */
+	{"O",	FILUID},
+	{"G",	FILGID},
+	{"L",	FILSYM},
+	{"S",	FILSOCK},
+	{"a",	BAND},
+	{"o",	BOR},
+}, ops2[] = {
+	{"==",	STREQ},
+	{"!=",	STRNE},
+}, opsm2[] = {
+	{"eq",	INTEQ},
+	{"ne",	INTNE},
+	{"ge",	INTGE},
+	{"gt",	INTGT},
+	{"le",	INTLE},
+	{"lt",	INTLT},
+	{"nt",	FILNT},
+	{"ot",	FILOT},
+	{"ef",	FILEQ},
+};
+
+static int nargc;
+static char **t_wp;
+static int parenlevel;
+
+static int	test_aexpr(enum token);
+static int	test_binop(enum token);
+static int	test_equalf(const char *, const char *);
+static int	test_filstat(char *, enum token);
+static int	test_getn(const char *);
+static intmax_t	test_getq(const char *);
+static int	test_intcmp(const char *, const char *);
+static int	test_isunopoperand(void);
+static int	test_islparenoperand(void);
+static int	test_isrparenoperand(void);
+static int	test_newerf(const char *, const char *);
+static int	test_nexpr(enum token);
+static int	test_oexpr(enum token);
+static int	test_olderf(const char *, const char *);
+static int	test_primary(enum token);
+static void	test_syntax(const char *, const char *);
+static enum	token test_lex(char *);
+
+static void test_syntax(const char *op, const char *msg) {
+	if (op && *op)
+		error("%s: %s", op, msg);
+	else
+		error("%s", msg);
 }
 
-// Check if string is a binary operator
-static int is_binary_op(const char *s) {
-    if (!s) return 0;
-    if (strcmp(s, "=") == 0 || strcmp(s, "!=") == 0) return 1;
-    if (s[0] != '-') return 0;
-    if (!strcmp(s, "-eq") || !strcmp(s, "-ne") || !strcmp(s, "-gt") ||
-        !strcmp(s, "-ge") || !strcmp(s, "-lt") || !strcmp(s, "-le")) return 1;
-    return 0;
+static int test_oexpr(enum token n) {
+	int res;
+
+	res = test_aexpr(n);
+	if (test_lex(nargc > 0 ? (--nargc, *++t_wp) : NULL) == BOR)
+		return test_oexpr(test_lex(nargc > 0 ? (--nargc, *++t_wp) : NULL)) || res;
+	t_wp--;
+	nargc++;
+	return res;
 }
 
-// File test helpers
-static int file_test(const char *path, char op) {
-    struct stat st;
-    int use_lstat = (op == 'h' || op == 'L');
-    int result = use_lstat ? lstat(path, &st) : stat(path, &st);
-    
-    if (result != 0) return 0; // Cannot stat
-    
-    switch (op) {
-        case 'b': return S_ISBLK(st.st_mode);
-        case 'c': return S_ISCHR(st.st_mode);
-        case 'd': return S_ISDIR(st.st_mode);
-        case 'e': return 1; // Exists
-        case 'f': return S_ISREG(st.st_mode);
-        case 'g': return (st.st_mode & S_ISGID) != 0;
-        case 'h': case 'L': return S_ISLNK(st.st_mode);
-        case 'p': return S_ISFIFO(st.st_mode);
-        case 'r': return access(path, R_OK) == 0;
-        case 'S': return S_ISSOCK(st.st_mode);
-        case 's': return st.st_size > 0;
-        case 'u': return (st.st_mode & S_ISUID) != 0;
-        case 'w': return access(path, W_OK) == 0;
-        case 'x': return access(path, X_OK) == 0;
-        default: return 0;
-    }
+static int test_aexpr(enum token n) {
+	int res;
+
+	res = test_nexpr(n);
+	if (test_lex(nargc > 0 ? (--nargc, *++t_wp) : NULL) == BAND)
+		return test_aexpr(test_lex(nargc > 0 ? (--nargc, *++t_wp) : NULL)) && res;
+	t_wp--;
+	nargc++;
+	return res;
 }
 
-// Integer comparison
-static int int_cmp(const char *s1, const char *op, const char *s2) {
-    char *end1, *end2;
-    long n1 = strtol(s1, &end1, 10);
-    long n2 = strtol(s2, &end2, 10);
-    
-    if (*end1 != '\0' || *end2 != '\0') {
-        error_msg("test: integer expression expected");
-        return 0;
-    }
-    
-    if (!strcmp(op, "-eq")) return n1 == n2;
-    if (!strcmp(op, "-ne")) return n1 != n2;
-    if (!strcmp(op, "-gt")) return n1 > n2;
-    if (!strcmp(op, "-ge")) return n1 >= n2;
-    if (!strcmp(op, "-lt")) return n1 < n2;
-    if (!strcmp(op, "-le")) return n1 <= n2;
-    return 0;
+static int test_nexpr(enum token n) {
+	if (n == UNOT)
+		return !test_nexpr(test_lex(nargc > 0 ? (--nargc, *++t_wp) : NULL));
+	return test_primary(n);
 }
 
-// Evaluate a primary (unary or binary test)
-static int eval_primary(char **args, int *pos, int end) {
-    if (*pos >= end) return 0;
-    
-    // Handle !
-    if (strcmp(args[*pos], "!") == 0) {
-        (*pos)++;
-        return !eval_primary(args, pos, end);
-    }
-    
-    // Handle ( expr )
-    if (strcmp(args[*pos], "(") == 0) {
-        (*pos)++;
-        int result = eval_expr(args, pos, end);
-        if (*pos < end && strcmp(args[*pos], ")") == 0) {
-            (*pos)++;
-        }
-        return result;
-    }
-    
-    // Unary operators
-    if (*pos + 1 < end && is_unary_op(args[*pos])) {
-        char *op = args[*pos];
-        char *arg = args[*pos + 1];
-        *pos += 2;
-        
-        if (strcmp(op, "-n") == 0) return strlen(arg) > 0;
-        if (strcmp(op, "-z") == 0) return strlen(arg) == 0;
-        if (strcmp(op, "-t") == 0) {
-            char *endptr;
-            int fd = strtol(arg, &endptr, 10);
-            if (*endptr != '\0') return 0;
-            return isatty(fd);
-        }
-        
-        // File tests
-        return file_test(arg, op[1]);
-    }
-    
-    // Binary operators
-    if (*pos + 2 < end && is_binary_op(args[*pos + 1])) {
-        char *arg1 = args[*pos];
-        char *op = args[*pos + 1];
-        char *arg2 = args[*pos + 2];
-        *pos += 3;
-        
-        if (strcmp(op, "=") == 0) return strcmp(arg1, arg2) == 0;
-        if (strcmp(op, "!=") == 0) return strcmp(arg1, arg2) != 0;
-        
-        return int_cmp(arg1, op, arg2);
-    }
-    
-    // Single string (non-null test)
-    if (*pos < end) {
-        char *str = args[*pos];
-        (*pos)++;
-        return strlen(str) > 0;
-    }
-    
-    return 0;
+static int test_primary(enum token n) {
+	enum token nn;
+	int res;
+
+	if (n == EOI)
+		return 0;		/* missing expression */
+	if (n == LPAREN) {
+		parenlevel++;
+		if ((nn = test_lex(nargc > 0 ? (--nargc, *++t_wp) : NULL)) == RPAREN) {
+			parenlevel--;
+			return 0;	/* missing expression */
+		}
+		res = test_oexpr(nn);
+		if (test_lex(nargc > 0 ? (--nargc, *++t_wp) : NULL) != RPAREN)
+			test_syntax(NULL, "closing paren expected");
+		parenlevel--;
+		return res;
+	}
+	if (TOKEN_TYPE(n) == UNOP) {
+		/* unary expression */
+		if (--nargc == 0)
+			test_syntax(NULL, "argument expected"); /* impossible */
+		switch (n) {
+		case STREZ:
+			return strlen(*++t_wp) == 0;
+		case STRNZ:
+			return strlen(*++t_wp) != 0;
+		case FILTT:
+			return isatty(test_getn(*++t_wp));
+		default:
+			return test_filstat(*++t_wp, n);
+		}
+	}
+
+	nn = test_lex(nargc > 0 ? t_wp[1] : NULL);
+	if (TOKEN_TYPE(nn) == BINOP)
+		return test_binop(nn);
+
+	return strlen(*t_wp) > 0;
 }
 
-// Evaluate AND expression (higher precedence than OR)
-static int eval_and(char **args, int *pos, int end) {
-    int result = eval_primary(args, pos, end);
-    
-    while (*pos < end && strcmp(args[*pos], "-a") == 0) {
-        (*pos)++;
-        int right = eval_primary(args, pos, end);
-        result = result && right;
-    }
-    
-    return result;
+static int test_binop(enum token n) {
+	const char *opnd1, *op, *opnd2;
+
+	opnd1 = *t_wp;
+	op = nargc > 0 ? (--nargc, *++t_wp) : NULL;
+
+	if ((opnd2 = nargc > 0 ? (--nargc, *++t_wp) : NULL) == NULL)
+		test_syntax(op, "argument expected");
+
+	switch (n) {
+	case STREQ:
+		return strcmp(opnd1, opnd2) == 0;
+	case STRNE:
+		return strcmp(opnd1, opnd2) != 0;
+	case STRLT:
+		return strcmp(opnd1, opnd2) < 0;
+	case STRGT:
+		return strcmp(opnd1, opnd2) > 0;
+	case INTEQ:
+		return test_intcmp(opnd1, opnd2) == 0;
+	case INTNE:
+		return test_intcmp(opnd1, opnd2) != 0;
+	case INTGE:
+		return test_intcmp(opnd1, opnd2) >= 0;
+	case INTGT:
+		return test_intcmp(opnd1, opnd2) > 0;
+	case INTLE:
+		return test_intcmp(opnd1, opnd2) <= 0;
+	case INTLT:
+		return test_intcmp(opnd1, opnd2) < 0;
+	case FILNT:
+		return test_newerf (opnd1, opnd2);
+	case FILOT:
+		return test_olderf (opnd1, opnd2);
+	case FILEQ:
+		return test_equalf (opnd1, opnd2);
+	default:
+		abort();
+		/* NOTREACHED */
+	}
 }
 
-// Evaluate OR expression
-static int eval_or(char **args, int *pos, int end) {
-    int result = eval_and(args, pos, end);
-    
-    while (*pos < end && strcmp(args[*pos], "-o") == 0) {
-        (*pos)++;
-        int right = eval_and(args, pos, end);
-        result = result || right;
-    }
-    
-    return result;
+static int test_filstat(char *nm, enum token mode) {
+	struct stat s;
+
+	if (mode == FILSYM ? lstat(nm, &s) : stat(nm, &s))
+		return 0;
+
+	switch (mode) {
+	case FILRD:
+		return (eaccess(nm, R_OK) == 0);
+	case FILWR:
+		return (eaccess(nm, W_OK) == 0);
+	case FILEX:
+		/* XXX work around eaccess(2) false positives for superuser */
+		if (eaccess(nm, X_OK) != 0)
+			return 0;
+		if (S_ISDIR(s.st_mode) || geteuid() != 0)
+			return 1;
+		return (s.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) != 0;
+	case FILEXIST:
+		return (eaccess(nm, F_OK) == 0);
+	case FILREG:
+		return S_ISREG(s.st_mode);
+	case FILDIR:
+		return S_ISDIR(s.st_mode);
+	case FILCDEV:
+		return S_ISCHR(s.st_mode);
+	case FILBDEV:
+		return S_ISBLK(s.st_mode);
+	case FILFIFO:
+		return S_ISFIFO(s.st_mode);
+	case FILSOCK:
+		return S_ISSOCK(s.st_mode);
+	case FILSYM:
+		return S_ISLNK(s.st_mode);
+	case FILSUID:
+		return (s.st_mode & S_ISUID) != 0;
+	case FILSGID:
+		return (s.st_mode & S_ISGID) != 0;
+	case FILSTCK:
+		return (s.st_mode & S_ISVTX) != 0;
+	case FILGZ:
+		return s.st_size > (off_t)0;
+	case FILUID:
+		return s.st_uid == geteuid();
+	case FILGID:
+		return s.st_gid == getegid();
+	default:
+		return 1;
+	}
 }
 
-// Top-level expression evaluator
-static int eval_expr(char **args, int *pos, int end) {
-    return eval_or(args, pos, end);
+static int find_op_1char(const struct t_op *op, const struct t_op *end, const char *s) {
+	char c;
+
+	c = s[0];
+	while (op != end) {
+		if (c == *op->op_text)
+			return op->op_num;
+		op++;
+	}
+	return OPERAND;
 }
 
-int builtin_test(char **args) {
+static int find_op_2char(const struct t_op *op, const struct t_op *end, const char *s) {
+	while (op != end) {
+		if (s[0] == op->op_text[0] && s[1] == op->op_text[1])
+			return op->op_num;
+		op++;
+	}
+	return OPERAND;
+}
+
+static int find_op(const char *s) {
+	if (s[0] == '\0')
+		return OPERAND;
+	else if (s[1] == '\0')
+		return find_op_1char(ops1, (&ops1)[1], s);
+	else if (s[2] == '\0')
+		return s[0] == '-' ? find_op_1char(opsm1, (&opsm1)[1], s + 1) :
+		    find_op_2char(ops2, (&ops2)[1], s);
+	else if (s[3] == '\0')
+		return s[0] == '-' ? find_op_2char(opsm2, (&opsm2)[1], s + 1) :
+		    OPERAND;
+	else
+		return OPERAND;
+}
+
+static enum token test_lex(char *s) {
+	int num;
+
+	if (s == NULL) {
+		return EOI;
+	}
+	num = find_op(s);
+	if (((TOKEN_TYPE(num) == UNOP || TOKEN_TYPE(num) == BUNOP)
+				&& test_isunopoperand()) ||
+	    (num == LPAREN && test_islparenoperand()) ||
+	    (num == RPAREN && test_isrparenoperand()))
+		return OPERAND;
+	return num;
+}
+
+static int test_isunopoperand(void) {
+	char *s;
+	char *t;
+	int num;
+
+	if (nargc == 1)
+		return 1;
+	s = *(t_wp + 1);
+	if (nargc == 2)
+		return parenlevel == 1 && strcmp(s, ")") == 0;
+	t = *(t_wp + 2);
+	num = find_op(s);
+	return TOKEN_TYPE(num) == BINOP &&
+	    (parenlevel == 0 || t[0] != ')' || t[1] != '\0');
+}
+
+static int test_islparenoperand(void) {
+	char *s;
+	int num;
+
+	if (nargc == 1)
+		return 1;
+	s = *(t_wp + 1);
+	if (nargc == 2)
+		return parenlevel == 1 && strcmp(s, ")") == 0;
+	if (nargc != 3)
+		return 0;
+	num = find_op(s);
+	return TOKEN_TYPE(num) == BINOP;
+}
+
+static int test_isrparenoperand(void) {
+	char *s;
+
+	if (nargc == 1)
+		return 0;
+	s = *(t_wp + 1);
+	if (nargc == 2)
+		return parenlevel == 1 && strcmp(s, ")") == 0;
+	return 0;
+}
+
+static int test_getn(const char *s) {
+	char *p;
+	long r;
+
+	errno = 0;
+	r = strtol(s, &p, 10);
+
+	if (s == p)
+		error("%s: bad number", s);
+
+	if (errno != 0)
+		error((errno == EINVAL) ? "%s: bad number" :
+					  "%s: out of range", s);
+
+	while (isspace((unsigned char)*p))
+		p++;
+
+	if (*p)
+		error("%s: bad number", s);
+
+	return (int) r;
+}
+
+static intmax_t test_getq(const char *s) {
+	char *p;
+	intmax_t r;
+
+	errno = 0;
+	r = strtoimax(s, &p, 10);
+
+	if (s == p)
+		error("%s: bad number", s);
+
+	if (errno != 0)
+		error((errno == EINVAL) ? "%s: bad number" :
+					  "%s: out of range", s);
+
+	while (isspace((unsigned char)*p))
+		p++;
+
+	if (*p)
+		error("%s: bad number", s);
+
+	return r;
+}
+
+static int test_intcmp (const char *s1, const char *s2) {
+	intmax_t q1, q2;
+
+	q1 = test_getq(s1);
+	q2 = test_getq(s2);
+
+	if (q1 > q2)
+		return 1;
+
+	if (q1 < q2)
+		return -1;
+
+	return 0;
+}
+
+static int test_newerf (const char *f1, const char *f2) {
+	struct stat b1, b2;
+
+	if (stat(f1, &b1) != 0 || stat(f2, &b2) != 0)
+		return 0;
+
+	if (b1.st_mtim.tv_sec > b2.st_mtim.tv_sec)
+		return 1;
+	if (b1.st_mtim.tv_sec < b2.st_mtim.tv_sec)
+		return 0;
+
+       return (b1.st_mtim.tv_nsec > b2.st_mtim.tv_nsec);
+}
+
+static int test_olderf (const char *f1, const char *f2) {
+	return (test_newerf(f2, f1));
+}
+
+static int test_equalf (const char *f1, const char *f2) {
+	struct stat b1, b2;
+
+	return (stat (f1, &b1) == 0 &&
+		stat (f2, &b2) == 0 &&
+		b1.st_dev == b2.st_dev &&
+		b1.st_ino == b2.st_ino);
+}
+
+int testcmd(char **argv) {
+	int	res;
+	char	*p;
     int argc = 0;
-    while (args[argc]) argc++;
-    
-    int is_bracket = (strcmp(args[0], "[") == 0);
-    
-    // Handle [ ... ] syntax
-    if (is_bracket) {
-        if (argc < 2 || strcmp(args[argc-1], "]") != 0) {
-            error_msg("[: missing ]");
-            return 2;
-        }
-        argc--; // Ignore trailing ]
-    }
-    
-    // Skip command name
-    char **argv = args + 1;
-    int count = argc - 1;
-    
-    // POSIX argument count rules
-    if (count == 0) return 1; // False
-    
-    if (count == 1) {
-        // Single string test
-        return (strlen(argv[0]) > 0) ? 0 : 1;
-    }
-    
-    if (count == 2) {
-        // ! expr or unary op
-        if (strcmp(argv[0], "!") == 0) {
-            return (strlen(argv[1]) > 0) ? 1 : 0;
-        }
-        if (is_unary_op(argv[0])) {
-            int pos = 0;
-            int result = eval_primary(argv, &pos, count);
-            return result ? 0 : 1;
-        }
-        // Otherwise unspecified, treat as string
-        return (strlen(argv[0]) > 0) ? 0 : 1;
-    }
-    
-    
-    if (count == 3) {
-        // Fast path for common string comparison: [ str1 = str2 ] or [ str1 != str2 ]
-        char *op = argv[1];
-        if (op[0] == '=' && op[1] == '\0') {
-            return (strcmp(argv[0], argv[2]) == 0) ? 0 : 1;
-        }
-        if (op[0] == '!' && op[1] == '=' && op[2] == '\0') {
-            return (strcmp(argv[0], argv[2]) != 0) ? 0 : 1;
-        }
-        
-        // Binary test or ! unary or ( expr )
-        if (is_binary_op(op)) {
-            int pos = 0;
-            int result = eval_primary(argv, &pos, count);
-            return result ? 0 : 1;
-        }
-        if (strcmp(argv[0], "!") == 0) {
-            // ! followed by 2-arg test
-            int pos = 1;
-            int result = eval_primary(argv, &pos, count);
-            return result ? 1 : 0;
-        }
-        if (strcmp(argv[0], "(") == 0 && strcmp(argv[2], ")") == 0) {
-            // ( string )
-            return (strlen(argv[1]) > 0) ? 0 : 1;
-        }
-        // Otherwise unspecified
-        return 2;
-    }
-    
-    if (count == 4) {
-        // ! 3-arg or ( 2-arg )
-        if (strcmp(argv[0], "!") == 0) {
-            int pos = 1;
-            int result = eval_primary(argv, &pos, count);
-            return result ? 1 : 0;
-        }
-        if (strcmp(argv[0], "(") == 0 && strcmp(argv[3], ")") == 0) {
-            int pos = 1;
-            int result = eval_primary(argv, &pos, 3);
-            return result ? 0 : 1;
-        }
-        // Otherwise unspecified
-        return 2;
-    }
-    
-    // >4 arguments: Use full expression parser
-    int pos = 0;
-    int result = eval_expr(argv, &pos, count);
-    return result ? 0 : 1;
+    while(argv[argc]) argc++;
+
+	if ((p = strrchr(argv[0], '/')) == NULL)
+		p = argv[0];
+	else
+		p++;
+	if (strcmp(p, "[") == 0) {
+		if (strcmp(argv[--argc], "]") != 0)
+			error("missing ]");
+		argv[argc] = NULL;
+	}
+
+	/* no expression => false */
+	if (--argc <= 0)
+		return 1;
+
+	nargc = argc;
+	t_wp = &argv[1];
+	parenlevel = 0;
+	if (nargc == 4 && strcmp(*t_wp, "!") == 0) {
+		/* Things like ! "" -o x do not fit in the normal grammar. */
+		--nargc;
+		++t_wp;
+		res = test_oexpr(test_lex(*t_wp));
+	} else
+		res = !test_oexpr(test_lex(*t_wp));
+
+	if (--nargc > 0)
+		test_syntax(*t_wp, "unexpected operator");
+
+	return res;
 }

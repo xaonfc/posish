@@ -193,6 +193,12 @@ static void refresh_line(const char *prompt, const char *buf, size_t len, size_t
 char *read_line(const char *prompt) {
     if (!input_is_tty()) {
         // Non-interactive: use getline
+        // If prompt is provided (interactive mode but non-TTY input), print it to stderr
+        if (prompt) {
+            error_write(prompt, strlen(prompt));
+            error_flush();
+        }
+        
         char *line = NULL;
         size_t len = 0;
         if (input_getline(&line, &len) == -1) {

@@ -1,4 +1,4 @@
-i# POSIX standard (cannot include since it's copyrighted)
+# POSIX standard (cannot include since it's copyrighted)
 docs/susv4-2018
 
 # Build artifacts
@@ -33,8 +33,6 @@ test_output/
 
 
 # testing
-dash
-freebsd-sh
-shellbench
 tests/__pycache__
+freebsd-sh
 

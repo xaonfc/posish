@@ -884,7 +884,7 @@ static int has_special_chars(const char *str);
 
 char *expand_word(const char *word) {
     if (!has_special_chars(word)) {
-        return mem_stack_strdup(word);
+        return (char *)word;
     }
     char **res = expand_word_internal(word, 0);
     if (!res) return NULL;
@@ -907,7 +907,14 @@ static int has_glob_chars(const char *str) {
         if (c == '\'') { in_single = !in_single; continue; }
         if (c == '"') { in_double = !in_double; continue; }
         if (!in_single && !in_double) {
-            if (c == '*' || c == '?' || c == '[') return 1;
+            if (c == '*' || c == '?') return 1;
+            if (c == '[') {
+                // Only a glob if there is a closing ']'
+                // Scan ahead
+                for (size_t j = i + 1; j < len; j++) {
+                    if (str[j] == ']') return 1;
+                }
+            }
         }
     }
     return 0;

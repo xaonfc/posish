@@ -6,6 +6,8 @@ posish \- POSIX-compliant command language interpreter
 .RB [ \-abCefhimnuvx ]
 .RB [ \-o
 .IR option ]
+.RB [ +o
+.IR option ]
 .RB [ \-c
 .I command_string
 .RI [ command_name
@@ -15,12 +17,16 @@ posish \- POSIX-compliant command language interpreter
 .RB [ \-abCefhimnuvx ]
 .RB [ \-o
 .IR option ]
+.RB [ +o
+.IR option ]
 .RB [ \-s ]
 .RI [ argument \fR...]
 .br
 .B posish
 .RB [ \-abCefhimnuvx ]
 .RB [ \-o
+.IR option ]
+.RB [ +o
 .IR option ]
 .I script_file
 .RI [ argument \fR...]
@@ -82,9 +88,30 @@ Prevent output redirection from overwriting existing files.
 Locate and remember commands as they are defined.
 .TP
 .BI \-o " option"
-Set named option. See
-.B set
-builtin for available options.
+Set named option. Available options:
+.BR allexport ,
+.BR errexit ,
+.BR ignoreeof ,
+.BR monitor ,
+.BR noclobber ,
+.BR noglob ,
+.BR noexec ,
+.BR nolog ,
+.BR notify ,
+.BR nounset ,
+.BR verbose ,
+.BR vi ,
+.BR xtrace .
+When used without an argument,
+.B \-o
+prints current option settings. Use
+.B +o
+to print in a format suitable for reinput.
+.TP
+.BI +o " option"
+Unset named option. When used without an argument,
+.B +o
+prints all option settings in a format suitable for reinput to the shell.
 .TP
 .B \-\-
 Terminate option processing. Remaining arguments are treated as operands.
@@ -158,7 +185,9 @@ Mark variables as read-only.
 Return from a shell function.
 .TP
 .B set
-Set or unset shell options and positional parameters.
+Set or unset shell options and positional parameters. Supports all POSIX-required
+.B \-o
+options.
 .TP
 .B shift
 Shift positional parameters.
@@ -178,9 +207,7 @@ Set signal handlers.
 .TP
 .B type
 Display command type information.
-.TP
-.B typeset
-Declare variables with attributes.
+
 .TP
 .B umask
 Set file creation mask.
@@ -421,11 +448,13 @@ PS1='myprompt> ' posish
 IEEE Std 1003.1-2017 (POSIX.1-2017)
 .SH KNOWN LIMITATIONS
 .IP \(bu 2
-Some
-.B set
-options are accepted but not fully implemented (-f, -v, -n, -u, -a, -m, -b, -C, -h).
-.B \-e
-(errexit) is fully implemented.
+.BR ignoreeof ,
+.BR nolog ,
+and
+.B vi
+options are accepted but not functional (POSIX-compliant no-ops).
+.IP \(bu
+Full job control requires an interactive terminal.
 .SH AUTHORS
 .PP
 Copyright \(co 2025 xaonfc (Mario)

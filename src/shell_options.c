@@ -14,6 +14,9 @@ int shell_all_export = 0;
 int shell_monitor = 0;
 int shell_hash_all = 0;
 int shell_notify = 0;
+int shell_ignore_eof = 0;
+int shell_nolog = 0;
+int shell_vi_mode = 0;
 int shell_ignore_errexit = 0;
 
 void shell_options_init(void) {
@@ -28,5 +31,8 @@ void shell_options_init(void) {
     shell_monitor = 0;
     shell_hash_all = 0;
     shell_notify = 0;
+    shell_ignore_eof = 0;
+    shell_nolog = 0;
+    shell_vi_mode = 0;
     shell_ignore_errexit = 0;
 }

@@ -17,6 +17,9 @@ extern int shell_all_export;      // set -a
 extern int shell_monitor;         // set -m
 extern int shell_hash_all;        // set -h
 extern int shell_notify;          // set -b
+extern int shell_ignore_eof;      // set -o ignoreeof
+extern int shell_nolog;           // set -o nolog
+extern int shell_vi_mode;         // set -o vi
 extern int shell_ignore_errexit;  // Internal flag to ignore -e
 
 void shell_options_init(void);

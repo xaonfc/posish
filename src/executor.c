@@ -268,7 +268,9 @@ static char *execute_subshell_capture(const char *cmd_str) {
         return mem_stack_strdup("");
     }
 
-    pid_t pid = fork();
+    // OPTIMIZATION: Use vfork() instead of fork() for command substitution
+    // This avoids expensive page table copy for what is essentially an exec path
+    pid_t pid = vfork();
     if (pid == 0) {
         close(pipefd[0]);
         dup2(pipefd[1], STDOUT_FILENO);
@@ -276,7 +278,7 @@ static char *execute_subshell_capture(const char *cmd_str) {
         
         int status = executor_execute(node);
         // ast_free(node); // No-op
-        exit(status);
+        _exit(status);  // CRITICAL: use _exit() not exit() with vfork()
     } else if (pid < 0) {
         error_sys("fork");
         close(pipefd[0]);

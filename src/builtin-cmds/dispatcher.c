@@ -20,7 +20,7 @@ int builtin_true(char **argv);
 int builtin_false(char **argv);
 int builtin_colon(char **argv);
 int builtin_local(char **argv);
-int builtin_typeset(char **argv);
+
 int testcmd(char **argv);
 
 /* Sorted array of builtins for binary search */
@@ -57,7 +57,7 @@ static const Builtin builtins[] = {
     {"trap", builtin_trap},
     {"true", builtin_true},
     {"type", builtin_type},
-    {"typeset", builtin_typeset},
+
     {"umask", builtin_umask},
     {"unalias", builtin_unalias},
     {"unset", builtin_unset},

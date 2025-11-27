@@ -38,7 +38,6 @@ SRCBUILTIN_OBJS = $(OBJ_DIR)/builtin-cmds/cd.o \
                $(OBJ_DIR)/builtin-cmds/readonly.o \
                $(OBJ_DIR)/builtin-cmds/getopts.o \
                $(OBJ_DIR)/builtin-cmds/local.o \
-               $(OBJ_DIR)/builtin-cmds/typeset.o \
                $(OBJ_DIR)/builtin-cmds/true_false.o \
                $(OBJ_DIR)/builtin-cmds/dispatcher.o
 

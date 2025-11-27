@@ -225,13 +225,10 @@ Token lexer_next_token(Lexer *lexer) {
                 }
             } else if (lexer->pos + 1 < lexer->len && lexer->input[lexer->pos + 1] == '{') {
                 // Parameter expansion ${...}
-                buffer[buf_idx++] = current;
+                ENSURE_BUFFER_SPACE(2);
+                buffer[buf_idx++] = current;  // Add '$'
                 lexer_advance(lexer);
-                ENSURE_BUFFER_SPACE(1);
-                buffer[buf_idx++] = current;
-                lexer_advance(lexer);
-                ENSURE_BUFFER_SPACE(1);
-                buffer[buf_idx++] = '{';
+                buffer[buf_idx++] = '{';       // Add '{'
                 lexer_advance(lexer);
                 
                 int nesting = 1;

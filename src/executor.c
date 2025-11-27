@@ -707,15 +707,42 @@ static char **expand_word_internal(const char *word, int allow_split) {
                     i++;
                     size_t start = i;
                     
+                    // Check for ${#VAR} - length of variable
+                    int is_length = 0;
+                    if (i < len && input[i] == '#') {
+                        is_length = 1;
+                        i++; // Skip the #
+                        start = i;  // Start after the #
+                    }
+                    
                     // Find the variable name and operator
-                    while (i < len && input[i] != '}' && input[i] != ':' && input[i] != '%' && input[i] != '#') {
-                        i++;
+                    // If is_length, we only look for closing }
+                    if (is_length) {
+                        while (i < len && input[i] != '}') {
+                            i++;
+                        }
+                    } else {
+                        while (i < len && input[i] != '}' && input[i] != ':' && input[i] != '%' && input[i] != '#') {
+                            i++;
+                        }
                     }
                     
                     var_len = i - start;
                     var_name = xmalloc(var_len + 1);
                     strncpy(var_name, input + start, var_len);
                     var_name[var_len] = '\0';
+                    
+                    // If it's a length operation, get the value and append its length
+                    if (is_length) {
+                        const char *val = var_get_value(var_name);
+                        int length = val ? strlen(val) : 0;
+                        char len_buf[32];
+                        snprintf(len_buf, sizeof(len_buf), "%d", length);
+                        sb_append_str(&sb, len_buf);
+                        free(var_name);
+                        if (i < len && input[i] == '}') i++; // Skip closing }
+                        continue;
+                    }
                     
                     
                     // Check for parameter expansion modifiers
@@ -1022,14 +1049,16 @@ static char **expand_word_internal(const char *word, int allow_split) {
         }
     }
     
-    if (push_empty_at_end) {
+    // Only push the final result if:
+    // 1. push_empty_at_end is true (we found quoted content or non-whitespace)
+    // 2. AND either we're not splitting, OR the result is non-empty, OR we already have results
+    // This ensures unquoted ${VAR:-} that expands to empty produces zero args, not one empty arg
+    if (push_empty_at_end && (!allow_split || sb.len > 0 || result_count > 0)) {
         results = mem_stack_realloc_array(results, result_count * sizeof(char*), (result_count + 2) * sizeof(char *), 1);
         results[result_count++] = sb_finish(&sb);
     } else {
         // free(sb.data); // No free needed
     }
-    
-    if (results) results[result_count] = NULL;
     
     if (results) results[result_count] = NULL;
     

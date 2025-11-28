@@ -78,7 +78,8 @@ void var_init(char **envp) {
     // (already loaded from envp above)
 }
 
-void var_set(const char *name, const char *value) {
+int var_set(const char *name, const char *value) {
+    // fprintf(stderr, "var_set: %s=%s\n", name, value);
     unsigned long h = hash_djb2(name);
     
     // Invalidate cache for this variable
@@ -101,11 +102,11 @@ void var_set(const char *name, const char *value) {
             if (strcmp(v->name, name) == 0 && v->is_local) {
                 if (v->readonly) {
                     fprintf(stderr, "%s: readonly variable\n", name);
-                    return;
+                    return 1;
                 }
                 free(v->value);
                 v->value = xstrdup(value);
-                return;
+                return 0;
             }
             v = v->next;
         }
@@ -119,11 +120,11 @@ void var_set(const char *name, const char *value) {
             if (strcmp(v->name, name) == 0 && !v->is_local) {
                 if (v->readonly) {
                     fprintf(stderr, "%s: readonly variable\n", name);
-                    return;
+                    return 1;
                 }
                 free(v->value);
                 v->value = xstrdup(value);
-                return;
+                return 0;
             }
             v = v->next;
         }
@@ -139,6 +140,7 @@ void var_set(const char *name, const char *value) {
     new_var->readonly = 0;
     new_var->next = current_scope->vars[h];
     current_scope->vars[h] = new_var;
+    return 0;
 }
 
 char *var_get(const char *name) {
@@ -147,6 +149,7 @@ char *var_get(const char *name) {
 }
 
 const char *var_get_value(const char *name) {
+    // fprintf(stderr, "var_get_value: %s\n", name);
     unsigned long h = hash_djb2(name);
     
     // Check cache first

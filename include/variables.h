@@ -7,7 +7,7 @@
 #include <sys/types.h>
 
 void var_init(char **envp);
-void var_set(const char *name, const char *value);
+int var_set(const char *name, const char *value);
 char *var_get(const char *name);
 const char *var_get_value(const char *name);
 void var_unset(const char *name);

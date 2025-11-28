@@ -65,56 +65,80 @@ ASTNode *parser_parse(Lexer *lexer) {
 }
 static ASTNode *parse_compound_list(Parser *parser, const char *terminator);
 
+static ASTNode *parse_if_tail(Parser *parser);
+
 static ASTNode *parse_if_statement(Parser *parser) {
-    // Expect 'if'
     Token token = parser_consume(parser);
     int lineno = token.lineno;
     free_token(token);
     
+    ASTNode *node = parse_if_tail(parser);
+    if (node) node->lineno = lineno;
+    return node;
+}
+
+static ASTNode *parse_if_tail(Parser *parser) {
     ASTNode *condition = parse_compound_list(parser, "then");
     if (!condition) return NULL;
     
-    // Expect 'then' (already consumed by parse_compound_list if it returned successfully?)
-    // No, parse_compound_list should peek and stop at terminator.
-    token = parser_peek(parser);
+    Token token = parser_peek(parser);
     if (token.type != TOKEN_KEYWORD || strcmp(token.value, "then") != 0) {
-        // Error: expected 'then'
         ast_free(condition);
         return NULL;
     }
     token = parser_consume(parser);
     free_token(token);
     
-    ASTNode *then_branch = parse_compound_list(parser, "else"); // Or 'fi'
-    // Actually, terminator could be 'else' or 'fi'.
-    // parse_compound_list needs to handle multiple possible terminators or we check after.
-    // Let's make parse_compound_list stop at any reserved word that isn't start of new command?
-    // Or pass a list of terminators.
-    // Simplified: parse_compound_list stops at 'else' or 'fi'.
+    ASTNode *then_branch = parse_compound_list(parser, "else"); 
     
     token = parser_peek(parser);
     ASTNode *else_branch = NULL;
     
-    if (token.type == TOKEN_KEYWORD && strcmp(token.value, "else") == 0) {
-        token = parser_consume(parser);
-        free_token(token);
-        else_branch = parse_compound_list(parser, "fi");
-        token = parser_peek(parser);
-    }
-    
-    if (token.type != TOKEN_KEYWORD || strcmp(token.value, "fi") != 0) {
-        // Error: expected 'fi'
+    if (token.type == TOKEN_KEYWORD) {
+        if (strcmp(token.value, "elif") == 0) {
+            token = parser_consume(parser);
+            int lineno = token.lineno;
+            free_token(token);
+            
+            else_branch = parse_if_tail(parser);
+            if (else_branch) else_branch->lineno = lineno;
+            else {
+                ast_free(condition);
+                if (then_branch) ast_free(then_branch);
+                return NULL;
+            }
+        } else if (strcmp(token.value, "else") == 0) {
+            token = parser_consume(parser);
+            free_token(token);
+            
+            else_branch = parse_compound_list(parser, "fi");
+            
+            token = parser_peek(parser);
+            if (token.type != TOKEN_KEYWORD || strcmp(token.value, "fi") != 0) {
+                ast_free(condition);
+                if (then_branch) ast_free(then_branch);
+                if (else_branch) ast_free(else_branch);
+                return NULL;
+            }
+            token = parser_consume(parser);
+            free_token(token);
+        } else if (strcmp(token.value, "fi") == 0) {
+            token = parser_consume(parser);
+            free_token(token);
+        } else {
+            // Error
+            ast_free(condition);
+            if (then_branch) ast_free(then_branch);
+            return NULL;
+        }
+    } else {
+        // Error
         ast_free(condition);
-        ast_free(then_branch);
-        if (else_branch) ast_free(else_branch);
+        if (then_branch) ast_free(then_branch);
         return NULL;
     }
-    token = parser_consume(parser);
-    free_token(token);
     
-    ASTNode *node = ast_new_if(condition, then_branch, else_branch);
-    node->lineno = lineno;
-    return node;
+    return ast_new_if(condition, then_branch, else_branch);
 }
 
 static ASTNode *parse_while_loop(Parser *parser);
@@ -193,7 +217,7 @@ static ASTNode *parse_for_loop(Parser *parser) {
     if (token.type != TOKEN_WORD) {
         return NULL;
     }
-    char *var_name = token.value; // Will be copied by ast_new_for
+    char *var_name = mem_stack_strdup(token.value); // Copy before freeing
     token = parser_consume(parser);
     free_token(token);
     
@@ -284,7 +308,7 @@ static ASTNode *parse_case_statement(Parser *parser) {
     // Expect word
     token = parser_peek(parser);
     if (token.type != TOKEN_WORD) return NULL;
-    char *word = token.value; // Will be copied by ast_new_case
+    char *word = mem_stack_strdup(token.value); // Copy before freeing token
     token = parser_consume(parser);
     free_token(token);
 
@@ -427,6 +451,7 @@ static ASTNode *parse_compound_list(Parser *parser, const char *terminator) {
         if (token.type == TOKEN_KEYWORD) {
             if (terminator && strcmp(token.value, terminator) == 0) break;
             if (strcmp(token.value, "else") == 0 || strcmp(token.value, "fi") == 0 || 
+                strcmp(token.value, "elif") == 0 ||
                 strcmp(token.value, "done") == 0 || strcmp(token.value, "then") == 0 || 
                 strcmp(token.value, "do") == 0 || strcmp(token.value, "esac") == 0 ||
                 strcmp(token.value, "}") == 0) {

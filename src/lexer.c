@@ -148,8 +148,38 @@ Token lexer_next_token(Lexer *lexer) {
                     lexer_advance(lexer);
                     continue;
                 }
-                ENSURE_BUFFER_SPACE(1);
-                buffer[buf_idx++] = lexer->input[lexer->pos];
+                char next = lexer->input[lexer->pos];
+                // If next char is special, we might want to keep the backslash to indicate escaping?
+                // Actually, for unquoted words, the lexer usually strips the backslash but marks the char as literal.
+                // But our executor's expand_word might need to know if it was escaped to avoid expansion.
+                // If we strip it here, `echo \$VAR` becomes `echo $VAR` (literal $).
+                // If we keep it, `echo \$VAR` becomes `echo \$VAR`.
+                // The executor then sees `\$VAR`.
+                // If we strip it, the token value is `$VAR`.
+                // Then `expand_word` sees `$VAR`. It will try to expand it unless we have a way to say "this part is quoted".
+                // Our current AST/Token doesn't track per-character quoting status.
+                // So we MUST keep the backslash if we want `expand_word` to treat it as literal.
+                
+                if (next == '$' || next == '`' || next == '"' || next == '\\' || next == '\'') {
+                     ENSURE_BUFFER_SPACE(2);
+                     buffer[buf_idx++] = '\\';
+                     buffer[buf_idx++] = next;
+                } else {
+                     // For other chars, backslash preserves literal value.
+                     // e.g. \a -> a (but literal a).
+                     // If we strip backslash, it becomes just 'a'.
+                     // But if we keep backslash, it becomes '\a'.
+                     // Standard shell: echo \a -> a.
+                     // echo \$VAR -> $VAR.
+                     
+                     // If we keep backslash for everything, then `echo \a` prints `\a` unless expand_word handles it.
+                     // Let's check expand_word.
+                     
+                     // For now, let's keep backslash for special chars: $ ` " and backslash
+                     ENSURE_BUFFER_SPACE(2);
+                     buffer[buf_idx++] = '\\';
+                     buffer[buf_idx++] = next;
+                }
                 lexer_advance(lexer);
             }
         } else if (current == '\'') {
@@ -308,7 +338,7 @@ Token lexer_next_token(Lexer *lexer) {
     token.value = buffer;
     
     
-    const char *keywords[] = {"if", "then", "else", "fi", "while", "until", "for", "in", "do", "done", "case", "esac", "{", "}", NULL};
+    const char *keywords[] = {"if", "then", "else", "elif", "fi", "while", "until", "for", "in", "do", "done", "case", "esac", "{", "}", NULL};
     for (int i = 0; keywords[i]; i++) {
         if (strcmp(buffer, keywords[i]) == 0) {
             token.type = TOKEN_KEYWORD;

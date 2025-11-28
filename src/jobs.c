@@ -131,16 +131,14 @@ pid_t job_resolve_spec(const char *spec) {
 int job_wait(Job *j) {
     if (!j) return -1;
     
-    int status;
+    int status = 0;
     pid_t pid;
     
     // Wait for the process group
-    // In a real shell, we'd use waitpid with WUNTRACED and handle stops/continues.
-    // For now, simple blocking wait.
     while ((pid = waitpid(-j->pgid, &status, 0)) < 0) {
         if (errno == EINTR) continue;
         
-        // Try waiting for the process itself if pgid fails (e.g. if it's same as pid)
+        // Try waiting for the process itself if pgid fails
         while ((pid = waitpid(j->pgid, &status, 0)) < 0) {
             if (errno == EINTR) continue;
             perror("waitpid");
@@ -157,7 +155,7 @@ int job_wait(Job *j) {
         return 128 + WTERMSIG(status);
     } else if (WIFSTOPPED(status)) {
         j->status = JOB_STOPPED;
-        return 128 + WSTOPSIG(status); // Not quite standard but ok
+        return 128 + WSTOPSIG(status);
     }
     
     return 0;

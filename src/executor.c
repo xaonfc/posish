@@ -515,6 +515,7 @@ static char **expand_word_internal(const char *word, int allow_split) {
     
     size_t i = 0;
     const char *input = tilde_expanded;
+    int saw_quotes = 0;
     
     const char *ifs = var_get_value("IFS");
     if (!ifs) {
@@ -532,10 +533,20 @@ static char **expand_word_internal(const char *word, int allow_split) {
     while (i < len) {
         if (input[i] == '\\') {
             push_empty_at_end = 1;
-            if (i + 1 < len) {
-                if (in_quote == 2) {
+            if (in_quote == 0) {
+                // Unquoted backslash: next char is literal
+                if (i + 1 < len) {
+                    sb_append(&sb, input[i+1]);
+                    i += 2;
+                } else {
+                    sb_append(&sb, '\\');
+                    i++;
+                }
+            } else if (in_quote == 2) {
+                // Double quoted backslash
+                if (i + 1 < len) {
                     char next = input[i+1];
-                    if (next == '$' || next == '`' || next == '"' || next == '\\' || next == '\n') {
+                    if (next == '$' || next == '`' || next == '"' || next == '\\') {
                         sb_append(&sb, next);
                         i += 2;
                     } else {
@@ -544,15 +555,17 @@ static char **expand_word_internal(const char *word, int allow_split) {
                         i += 2;
                     }
                 } else {
-                    sb_append(&sb, input[i+1]);
-                    i += 2;
+                    sb_append(&sb, '\\');
+                    i++;
                 }
             } else {
+                // Single quoted backslash (literal)
                 sb_append(&sb, '\\');
                 i++;
             }
         } else if (input[i] == '\'') {
             push_empty_at_end = 1;
+            saw_quotes = 1;
             if (in_quote == 0) {
                 i++;
                 while (i < len && input[i] != '\'') {
@@ -564,6 +577,7 @@ static char **expand_word_internal(const char *word, int allow_split) {
             }
         } else if (input[i] == '"') {
             push_empty_at_end = 1;
+            saw_quotes = 1;
             if (in_quote == 0) {
                 in_quote = 2;
                 i++;
@@ -1051,9 +1065,10 @@ static char **expand_word_internal(const char *word, int allow_split) {
     
     // Only push the final result if:
     // 1. push_empty_at_end is true (we found quoted content or non-whitespace)
-    // 2. AND either we're not splitting, OR the result is non-empty, OR we already have results
+    // 2. AND either we're not splitting, OR the result is non-empty, OR we already have results, OR we saw quotes
     // This ensures unquoted ${VAR:-} that expands to empty produces zero args, not one empty arg
-    if (push_empty_at_end && (!allow_split || sb.len > 0 || result_count > 0)) {
+    // But quoted "" produces one empty arg
+    if (push_empty_at_end && (!allow_split || sb.len > 0 || result_count > 0 || saw_quotes)) {
         results = mem_stack_realloc_array(results, result_count * sizeof(char*), (result_count + 2) * sizeof(char *), 1);
         results[result_count++] = sb_finish(&sb);
     } else {
@@ -1074,11 +1089,10 @@ char *expand_word(const char *word) {
     if (!has_special_chars(word)) {
         return (char *)word;
     }
-    char **res = expand_word_internal(word, 0);
-    if (!res) return NULL;
-    char *ret = res[0];
-    // free(res); // No free needed
-    return ret;
+    char **res_list = expand_word_internal(word, 0);
+    if (!res_list) return NULL;
+    char *res = res_list[0];
+    return res;
 }
 
 char **expand_word_split(const char *word) {
@@ -1174,7 +1188,10 @@ static int execute_simple_command(ASTNode *node) {
     
     for (size_t i = 0; i < node->data.command.assignment_count; i++) {
         char *expanded_val = expand_word(node->data.command.assignments[i].value);
-        var_set(node->data.command.assignments[i].name, expanded_val);
+        if (var_set(node->data.command.assignments[i].name, expanded_val) != 0) {
+            // Assignment failed (readonly variable)
+            return 1;
+        }
         // No free needed for expanded_val
     }
     
@@ -1385,12 +1402,7 @@ static int execute_simple_command(ASTNode *node) {
     
     // No free needed for executable, argv
 
-    if (WIFEXITED(status)) {
-        return WEXITSTATUS(status);
-    } else if (WIFSIGNALED(status)) {
-        return 128 + WTERMSIG(status);
-    }
-    return 0;
+    return status;
 }
 
 static int execute_pipeline(ASTNode *node) {
@@ -1477,6 +1489,7 @@ static int execute_for(ASTNode *node) {
             if (expanded_list) {
                 for (int k = 0; expanded_list[k]; k++) {
                     char *expanded = expanded_list[k];
+                    // fprintf(stderr, "For loop item: %s\n", expanded);
                     
                     if (has_glob_chars(expanded)) {
                         char *pattern = prepare_glob_pattern(expanded);
@@ -1523,7 +1536,12 @@ static int execute_for(ASTNode *node) {
         mem_stack_push_mark(&smark);
         
         signal_check_pending();
-        var_set(node->data.for_loop.var_name, items[i]);
+        if (var_set(node->data.for_loop.var_name, items[i]) != 0) {
+            // Assignment failed (readonly variable)
+            status = 1;
+            mem_stack_pop_mark(&smark);
+            break;
+        }
         if (node->data.for_loop.body) {
             status = executor_execute(node->data.for_loop.body);
             if (status == EXIT_BREAK) {
@@ -1664,16 +1682,84 @@ static int execute_until(ASTNode *node) {
 }
 
 
+static int is_safe_for_vfork(ASTNode *node) {
+    if (!node) return 1;
+    
+    switch (node->type) {
+        case NODE_COMMAND: {
+            // Assignments are unsafe (modify state)
+            if (node->data.command.assignment_count > 0) return 0;
+            
+            // Empty command is safe
+            if (node->data.command.arg_count == 0) return 1;
+            
+            char *cmd = node->data.command.args[0];
+            if (!cmd) return 1;
+            
+            // Check for pure builtins that don't modify shell state
+            if (strcmp(cmd, ":") == 0 ||
+                strcmp(cmd, "true") == 0 ||
+                strcmp(cmd, "false") == 0 ||
+                strcmp(cmd, "echo") == 0 ||
+                strcmp(cmd, "printf") == 0 ||
+                strcmp(cmd, "test") == 0 ||
+                strcmp(cmd, "[") == 0) {
+                return 1;
+            }
+            
+            // Check if it's a builtin at all (all others are potentially unsafe)
+            if (builtin_is_builtin(cmd)) {
+                return 0;
+            }
+            
+            // Check if it's a function (we don't analyze them, so assume unsafe)
+            if (func_get(cmd)) {
+                return 0;
+            }
+            
+            // External command - SAFE! (execve replaces memory)
+            return 1;
+        }
+        case NODE_PIPELINE:
+        case NODE_AND:
+        case NODE_OR:
+            return is_safe_for_vfork(node->data.pipeline.left) && 
+                   is_safe_for_vfork(node->data.pipeline.right);
+                   
+        case NODE_LIST:
+            return is_safe_for_vfork(node->data.list.left) && 
+                   is_safe_for_vfork(node->data.list.right);
+                   
+        case NODE_IF:
+            return is_safe_for_vfork(node->data.if_stmt.condition) &&
+                   is_safe_for_vfork(node->data.if_stmt.then_branch) &&
+                   is_safe_for_vfork(node->data.if_stmt.else_branch);
+                   
+        case NODE_SUBSHELL:
+            return is_safe_for_vfork(node->data.subshell.body);
+            
+        case NODE_GROUP:
+            return is_safe_for_vfork(node->data.group.body);
+            
+        // Loops, cases, functions, etc. are too complex/unsafe
+        default:
+            return 0;
+    }
+}
+
 static int execute_subshell(ASTNode *node) {
-    // OPTIMIZATION: Use vfork() instead of fork() for faster process creation
-    // vfork() shares parent's address space until exec/exit, avoiding copy-on-write overhead
-    pid_t pid = vfork();
+    // Use vfork() if safe (no state modification), otherwise fork()
+    pid_t pid;
+    if (is_safe_for_vfork(node->data.subshell.body)) {
+        pid = vfork();
+    } else {
+        pid = fork();
+    }
     
     if (pid == 0) {
-        // Child process - must be careful with vfork()
-        // Can only call exec() or _exit(), no other modifications
+        // Child process
         int status = executor_execute(node->data.subshell.body);
-        _exit(status);  // Use _exit() not exit() with vfork()
+        exit(status);  // Use exit() (or _exit)
     } else if (pid > 0) {
         int status;
         waitpid(pid, &status, 0);
@@ -1682,7 +1768,7 @@ static int execute_subshell(ASTNode *node) {
         }
         return 1;
     } else {
-        perror("vfork");
+        perror("fork");
         return 1;
     }
 }

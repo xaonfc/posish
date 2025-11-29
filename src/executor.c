@@ -1194,7 +1194,7 @@ char *expand_word(const char *word) {
     return res;
 }
 
-char **expand_word_split(const char *word) {
+static char **expand_simple_var(const char *word) {
     // Optimization for "$VAR"
     if (word[0] == '"' && word[1] == '$') {
         size_t len = strlen(word);
@@ -1223,6 +1223,12 @@ char **expand_word_split(const char *word) {
             }
         }
     }
+    return NULL;
+}
+
+char **expand_word_split(const char *word) {
+    char **simple_res = expand_simple_var(word);
+    if (simple_res) return simple_res;
     return expand_word_internal(word, 1);
 }
 
@@ -1296,6 +1302,47 @@ static char *prepare_glob_pattern(const char *str) {
     }
     res[res_idx] = '\0';
     return res;
+}
+
+static int try_test_fast_path(int argc, char **argv) {
+    const char *cmd = argv[0];
+    
+    // Fast-path for [ and test builtins
+    if ((cmd[0] == '[' && cmd[1] == '\0') || (strcmp(cmd, "test") == 0)) {
+        int is_bracket = (cmd[0] == '[');
+        int effective_argc = argc;
+        
+        if (is_bracket) {
+            if (strcmp(argv[argc-1], "]") != 0) {
+                // Missing closing bracket, fall back to slow path for error reporting
+                return -1;
+            }
+            effective_argc--; // Ignore trailing ]
+        }
+        
+        // [ a = b ] or test a = b
+        if (effective_argc == 4 && argv[2][1] == '\0') {
+            if (argv[2][0] == '=') {
+                return (strcmp(argv[1], argv[3]) != 0);
+            }
+        }
+        
+        // [ a != b ] or test a != b
+        if (effective_argc == 4 && argv[2][0] == '!' && argv[2][1] == '=' && argv[2][2] == '\0') {
+            return (strcmp(argv[1], argv[3]) == 0);
+        }
+        
+        // [ -z a ] or test -z a
+        if (effective_argc == 3 && argv[1][0] == '-' && argv[1][1] == 'z' && argv[1][2] == '\0') {
+            return (argv[2][0] != '\0');
+        }
+        
+        // [ -n a ] or test -n a
+        if (effective_argc == 3 && argv[1][0] == '-' && argv[1][1] == 'n' && argv[1][2] == '\0') {
+            return (argv[2][0] == '\0');
+        }
+    }
+    return -1;
 }
 
 static int execute_simple_command(ASTNode *node);
@@ -1479,43 +1526,8 @@ static int execute_simple_command(ASTNode *node) {
         return 1;
     }
 
-    // Fast-path for [ and test builtins
-    if ((cmd[0] == '[' && cmd[1] == '\0') || (strcmp(cmd, "test") == 0)) {
-        int is_bracket = (cmd[0] == '[');
-        int effective_argc = argc;
-        
-        if (is_bracket) {
-            if (strcmp(argv[argc-1], "]") != 0) {
-                // Missing closing bracket, fall back to slow path for error reporting
-                goto slow_test;
-            }
-            effective_argc--; // Ignore trailing ]
-        }
-        
-        // [ a = b ] or test a = b
-        if (effective_argc == 4 && argv[2][1] == '\0') {
-            if (argv[2][0] == '=') {
-                return (strcmp(argv[1], argv[3]) != 0);
-            }
-        }
-        
-        // [ a != b ] or test a != b
-        if (effective_argc == 4 && argv[2][0] == '!' && argv[2][1] == '=' && argv[2][2] == '\0') {
-            return (strcmp(argv[1], argv[3]) == 0);
-        }
-        
-        // [ -z a ] or test -z a
-        if (effective_argc == 3 && argv[1][0] == '-' && argv[1][1] == 'z' && argv[1][2] == '\0') {
-            return (argv[2][0] != '\0');
-        }
-        
-        // [ -n a ] or test -n a
-        if (effective_argc == 3 && argv[1][0] == '-' && argv[1][1] == 'n' && argv[1][2] == '\0') {
-            return (argv[2][0] == '\0');
-        }
-        
-        slow_test:;
-    }
+    int test_res = try_test_fast_path(argc, argv);
+    if (test_res != -1) return test_res;
 
     if (builtin_is_builtin(argv[0])) {
         int is_exec_no_args = (strcmp(argv[0], "exec") == 0 && argc == 1);
@@ -1798,7 +1810,7 @@ static int execute_while(ASTNode *node) {
         struct stackmark smark;
         mem_stack_push_mark(&smark);
 
-        // signal_check_pending(); // Redundant: called in executor_execute
+
         int old_ignore = shell_ignore_errexit;
         shell_ignore_errexit = 1;
         int cond_status = executor_execute(node->data.while_loop.condition);
@@ -1843,7 +1855,7 @@ static int execute_until(ASTNode *node) {
         struct stackmark smark;
         mem_stack_push_mark(&smark);
 
-        signal_check_pending();
+
         int old_ignore = shell_ignore_errexit;
         shell_ignore_errexit = 1;
         int cond_status = executor_execute(node->data.until_loop.condition);

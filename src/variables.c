@@ -40,14 +40,7 @@ static Scope *current_scope = NULL;
 
 // Simple LRU cache
 #define VAR_CACHE_SIZE 4
-/*
-static struct {
-    const char *name;
-    char *last_name;
-    char *value;
-} var_cache[VAR_CACHE_SIZE] = {{NULL, NULL, NULL}};
-static int var_cache_next = 0;
-*/
+
 
 static unsigned long hash_djb2(const char *str, size_t *len_out) {
     unsigned long hash = 5381;

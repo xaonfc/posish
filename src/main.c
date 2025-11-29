@@ -577,6 +577,90 @@ done_parsing_options:
             struct stackmark smark;
             mem_stack_push_mark(&smark);
             
+            
+            // Fast-path optimization: Skip parser for common trivial patterns
+            // Design inspired by FreeBSD sh architecture (BSD-3-Clause)
+            const char *p = command_buffer;
+            
+            // Skip leading whitespace
+            while (*p == ' ' || *p == '\t') p++;
+            
+            // Check for blank line or comment
+            if (*p == '\0' || *p == '#' || *p == '\n') {
+                // Blank or comment line - skip parsing entirely
+                history_add(command_buffer);
+                free(command_buffer);
+                command_buffer = NULL;
+                mem_stack_pop_mark(&smark);
+                continue;
+            }
+            
+            // Check for single colon command
+            if (p[0] == ':' && (p[1] == '\0' || p[1] == '\n' || p[1] == ' ' || p[1] == '\t' || p[1] == '#')) {
+                // ":" command - just succeeds, skip parsing
+                history_add(command_buffer);
+                // Success status will be handled normally
+                free(command_buffer);
+                command_buffer = NULL;
+                mem_stack_pop_mark(&smark);
+                continue;
+            }
+            
+            // Check for simple assignment (var=value with no special chars)
+            // Only optimize if it's a single assignment with no quotes/expansions
+            const char *eq = strchr(p, '=');
+            if (eq && eq > p) {
+                // Check if var name is valid and value has no special chars
+                int is_simple = 1;
+                
+                // Validate variable name (alphanumeric + underscore, starts with letter/underscore)
+                const char *c = p;
+                if (!isalpha(*c) && *c != '_') is_simple = 0;
+                for (c = p; c < eq && is_simple; c++) {
+                    if (!isalnum(*c) && *c != '_') is_simple = 0;
+                }
+                
+                // Check value has no special shell characters that need expansion
+                if (is_simple) {
+                    for (c = eq + 1; *c && is_simple; c++) {
+                        if (*c == '$' || *c == '`' || *c == '\\' || *c == '"' || *c == '\'' || 
+                            *c == '*' || *c == '?' || *c == '[' || *c == '~' || *c == '\n') {
+                            is_simple = 0;
+                        }
+                    }
+                }
+                
+                if (is_simple) {
+                    // Fast assignment path
+                    size_t name_len = eq - p;
+                    char *name = mem_stack_alloc(name_len + 1);
+                    strncpy(name, p, name_len);
+                    name[name_len] = '\0';
+                    
+                    // Find end of value (trim trailing whitespace/newline)
+                    const char *val_start = eq + 1;
+                    const char *val_end = val_start + strlen(val_start);
+                    while (val_end > val_start && (val_end[-1] == ' ' || val_end[-1] == '\t' || val_end[-1] == '\n')) {
+                        val_end--;
+                    }
+                    
+                    size_t val_len = val_end - val_start;
+                    char *value = mem_stack_alloc(val_len + 1);
+                    strncpy(value, val_start, val_len);
+                    value[val_len] = '\0';
+                    
+                    history_add(command_buffer);
+                    posish_var_set(name, value);
+                    // Success status handled normally
+                    
+                    free(command_buffer);
+                    command_buffer = NULL;
+                    mem_stack_pop_mark(&smark);
+                    continue;
+                }
+            }
+            
+            // Normal path: use parser
             ASTNode *ast = parser_parse(&lexer);
 
             if (ast) {

@@ -172,6 +172,64 @@ static int handle_redirections(Redirection *redirs, size_t count) {
 #include "parser.h"
 
 static int is_safe_for_vfork(ASTNode *node);
+char **expand_word_split(const char *word);
+
+static char *execute_builtin_capture(char **argv) {
+    // Create a pipe to capture stdout
+    int pipefd[2];
+    if (pipe(pipefd) < 0) {
+        return mem_stack_strdup("");
+    }
+    
+    // Save original stdout
+    int saved_stdout = dup(STDOUT_FILENO);
+    if (saved_stdout < 0) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return mem_stack_strdup("");
+    }
+    
+    // Redirect stdout to pipe
+    if (dup2(pipefd[1], STDOUT_FILENO) < 0) {
+        close(saved_stdout);
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return mem_stack_strdup("");
+    }
+    close(pipefd[1]);
+    
+    // Execute builtin in-process
+    builtin_run(argv);
+    
+    // Restore stdout
+    buf_out_flush_all();
+    dup2(saved_stdout, STDOUT_FILENO);
+    close(saved_stdout);
+    
+    // Read captured output from pipe
+    size_t size = 0;
+    size_t capacity = 128;
+    char *buffer = mem_stack_alloc(capacity);
+    
+    ssize_t n;
+    while ((n = read(pipefd[0], buffer + size, capacity - size - 1)) > 0) {
+        size += n;
+        if (size >= capacity - 1) {
+            size_t new_capacity = capacity * 2;
+            buffer = mem_stack_realloc_array(buffer, capacity, new_capacity, 1);
+            capacity = new_capacity;
+        }
+    }
+    close(pipefd[0]);
+    buffer[size] = '\0';
+    
+    // Strip trailing newlines
+    while (size > 0 && buffer[size - 1] == '\n') {
+        buffer[--size] = '\0';
+    }
+    
+    return buffer;
+}
 
 static char *execute_subshell_capture(const char *cmd_str) {
     // ULTRA-FAST path: Skip parsing for known zero-output builtins
@@ -214,64 +272,76 @@ static char *execute_subshell_capture(const char *cmd_str) {
             builtin_run(argv);
             return mem_stack_strdup("");
         }
-        
-        // Create a pipe to capture stdout
-        int pipefd[2];
-        if (pipe(pipefd) < 0) {
-            return mem_stack_strdup("");
+
+        // Check for other safe builtins (echo, printf, pwd)
+        // Unsafe builtins (cd, exit, export, etc.) must fork to avoid polluting parent state
+        int is_safe = (strcmp(cmd_name, "echo") == 0 || 
+                       strcmp(cmd_name, "printf") == 0 || 
+                       strcmp(cmd_name, "pwd") == 0);
+                       
+        if (!is_safe) {
+            goto slow_path;
         }
         
-        // Save original stdout
-        int saved_stdout = dup(STDOUT_FILENO);
-        if (saved_stdout < 0) {
-            close(pipefd[0]);
-            close(pipefd[1]);
-            return mem_stack_strdup("");
+        if (!is_safe) {
+            goto slow_path;
         }
         
-        // Redirect stdout to pipe
-        if (dup2(pipefd[1], STDOUT_FILENO) < 0) {
-            close(saved_stdout);
-            close(pipefd[0]);
-            close(pipefd[1]);
-            return mem_stack_strdup("");
-        }
-        close(pipefd[1]);
-        
-        // Execute builtin in-process
         char *argv[2] = {(char *)cmd_name, NULL};
-        builtin_run(argv);
-        
-        // Restore stdout
-        buf_out_flush_all();
-        dup2(saved_stdout, STDOUT_FILENO);
-        close(saved_stdout);
-        
-        // Read captured output from pipe
-        size_t size = 0;
-        size_t capacity = 128;
-        char *buffer = mem_stack_alloc(capacity);
-        
-        ssize_t n;
-        while ((n = read(pipefd[0], buffer + size, capacity - size - 1)) > 0) {
-            size += n;
-            if (size >= capacity - 1) {
-                size_t new_capacity = capacity * 2;
-                buffer = mem_stack_realloc_array(buffer, capacity, new_capacity, 1);
-                capacity = new_capacity;
-            }
-        }
-        close(pipefd[0]);
-        buffer[size] = '\0';
-        
-        // Strip trailing newlines
-        while (size > 0 && buffer[size - 1] == '\n') {
-            buffer[--size] = '\0';
-        }
-        
-        return buffer;
+        return execute_builtin_capture(argv);
     }
     
+    // OPTIMIZATION: Check for simple functions that wrap safe builtins
+    // e.g. func() { echo 1; }
+    if (node && node->type == NODE_COMMAND && 
+        node->data.command.arg_count == 1 && // No args passed to function
+        node->data.command.redirection_count == 0 &&
+        !builtin_is_builtin(node->data.command.args[0])) {
+            
+        ASTNode *body = func_get(node->data.command.args[0]);
+        if (body) {
+            // Unwrap group { ... }
+            if (body->type == NODE_GROUP) body = body->data.group.body;
+            
+            // Check if body is a simple command
+            if (body->type == NODE_COMMAND && 
+                body->data.command.redirection_count == 0 &&
+                body->data.command.assignment_count == 0) {
+                
+                const char *inner_cmd = body->data.command.args[0];
+                
+                // Check if inner command is a safe builtin
+                int is_safe = (strcmp(inner_cmd, "echo") == 0 || 
+                               strcmp(inner_cmd, "printf") == 0 || 
+                               strcmp(inner_cmd, "pwd") == 0 ||
+                               strcmp(inner_cmd, "true") == 0 ||
+                               strcmp(inner_cmd, "false") == 0 ||
+                               strcmp(inner_cmd, ":") == 0);
+                               
+                if (is_safe) {
+                    // Expand arguments
+                    char **argv = NULL;
+                    size_t argc = 0;
+                    
+                    for (size_t i = 0; i < body->data.command.arg_count; i++) {
+                        char **expanded = expand_word_split(body->data.command.args[i]);
+                        if (expanded) {
+                            for (int k = 0; expanded[k]; k++) {
+                                argv = mem_stack_realloc_array(argv, argc, argc + 1, sizeof(char*));
+                                argv[argc++] = expanded[k];
+                            }
+                        }
+                    }
+                    argv = mem_stack_realloc_array(argv, argc, argc + 1, sizeof(char*));
+                    argv[argc] = NULL;
+                    
+                    return execute_builtin_capture(argv);
+                }
+            }
+        }
+    }
+    
+    slow_path:;
     // Slow path: fork required
     int pipefd[2];
     if (pipe(pipefd) < 0) {

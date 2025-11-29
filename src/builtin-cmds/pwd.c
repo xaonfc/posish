@@ -34,7 +34,7 @@ int builtin_pwd(char **args) {
     }
     
     if (logical) {
-        char *pwd = var_get("PWD");
+        char *pwd = posish_var_get("PWD");
         if (pwd) {
             printf("%s\n", pwd);
             free(pwd);

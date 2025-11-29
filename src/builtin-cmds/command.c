@@ -57,7 +57,7 @@ int builtin_command(char **argv) {
         }
         
         // Search in PATH
-        char *path = use_default_path ? "/usr/bin:/bin" : var_get("PATH");
+        char *path = use_default_path ? "/usr/bin:/bin" : (char*)pathval();
         if (!path) {
             return 1;
         }
@@ -76,7 +76,6 @@ int builtin_command(char **argv) {
                     printf("%s\n", full_path);
                 }
                 free(path_copy);
-                if (!use_default_path) free(path);
                 return 0;
             }
             
@@ -84,7 +83,6 @@ int builtin_command(char **argv) {
         }
         
         free(path_copy);
-        if (!use_default_path && path) free(path);
         return 1;
     }
     
@@ -96,7 +94,7 @@ int builtin_command(char **argv) {
     }
     
     // Not a builtin, search for external command
-    char *path = use_default_path ? "/usr/bin:/bin" : var_get("PATH");
+    char *path = use_default_path ? "/usr/bin:/bin" : (char*)pathval();
     if (!path) {
         fprintf(stderr, "command: %s: not found\n", cmd_name);
         return 127;
@@ -119,7 +117,6 @@ int builtin_command(char **argv) {
     }
     
     free(path_copy);
-    if (!use_default_path && path) free(path);
     
     if (!executable) {
         fprintf(stderr, "command: %s: not found\n", cmd_name);

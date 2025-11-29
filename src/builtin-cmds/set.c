@@ -62,7 +62,7 @@ static int set_named_option(const char *name, int enable) {
 int builtin_set(char **args) {
     if (!args[1]) {
         // List all variables
-        char **vars = var_get_all();
+        char **vars = posish_var_get_all();
         for (char **v = vars; *v != NULL; v++) {
             printf("%s\n", *v);
             free(*v);
@@ -172,6 +172,6 @@ int builtin_set(char **args) {
         count++;
     }
     
-    var_set_positional(count, args + start_idx);
+    posish_var_set_positional(count, args + start_idx);
     return 0;
 }

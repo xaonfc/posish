@@ -1,8 +1,5 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
-
-
 #include "builtins.h"
-#include <stdio.h>
+#include "buf_output.h"
 #include <string.h>
 
 int builtin_echo(char **args) {
@@ -16,14 +13,15 @@ int builtin_echo(char **args) {
     }
     
     for (int i = start_idx; args[i] != NULL; i++) {
-        printf("%s", args[i]);
-        if (args[i+1] != NULL) {
-            printf(" ");
+        if (i > start_idx) {
+            OUT_PUTC(' ');
         }
+        OUT_PUTS(args[i]);
     }
+    
     if (!suppress_newline) {
-        printf("\n");
+        OUT_PUTC('\n');
     }
-    fflush(stdout);
+    
     return 0;
 }

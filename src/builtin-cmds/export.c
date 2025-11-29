@@ -10,7 +10,7 @@
 int builtin_export(char **args) {
     if (!args[1]) {
         // List exported variables
-        char **env = var_get_environ();
+        char **env = posish_var_get_environ();
         for (char **e = env; *e != NULL; e++) {
             char *eq = strchr(*e, '=');
             if (eq) {
@@ -39,11 +39,11 @@ int builtin_export(char **args) {
         char *eq = strchr(arg, '=');
         if (eq) {
             *eq = '\0';
-            var_set(arg, eq + 1);
-            var_export(arg);
+            posish_var_set(arg, eq + 1);
+            posish_var_export(arg);
             *eq = '='; // Restore
         } else {
-            var_export(arg);
+            posish_var_export(arg);
         }
     }
     return 0;

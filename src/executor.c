@@ -3,7 +3,7 @@
 
 #include "executor.h"
 #include "memalloc.h"
-#include "mem_stack.h"
+#include "memalloc.h"
 #include "builtins.h"
 #include "error.h"
 #include "variables.h"
@@ -46,7 +46,7 @@ char *find_executable(const char *command) {
         return mem_stack_strdup(command);
     }
 
-    const char *path_env = getenv("PATH");
+    const char *path_env = pathval();
     if (!path_env) return NULL;
 
     char *path_copy = mem_stack_strdup(path_env);
@@ -71,9 +71,17 @@ char *find_executable(const char *command) {
     return result;
 }
 
+#include "buf_output.h" // Added
+
 static int handle_redirections(Redirection *redirs, size_t count) {
     for (size_t i = 0; i < count; i++) {
         Redirection *r = &redirs[i];
+        
+        // Flush buffered output if redirecting stdout
+        if (r->io_number == STDOUT_FILENO) {
+            buf_out_flush_all();
+        }
+        
         int fd = -1;
         int flags = 0;
         int mode = 0666;
@@ -233,6 +241,7 @@ static char *execute_subshell_capture(const char *cmd_str) {
         builtin_run(argv);
         
         // Restore stdout
+        buf_out_flush_all();
         dup2(saved_stdout, STDOUT_FILENO);
         close(saved_stdout);
         
@@ -380,7 +389,8 @@ static long eval_factor(const char **str) {
         strncpy(name, start, len);
         name[len] = '\0';
         
-        char *val_str = var_get(name);
+        char *val_str = posish_var_get(name);
+
         long val = 0;
         if (val_str) {
             val = strtol(val_str, NULL, 10);
@@ -437,8 +447,8 @@ static long eval_expression(const char **str) {
 }
 
 static long evaluate_arithmetic(const char *expr) {
-    const char *ptr = expr;
-    return eval_expression(&ptr);
+    const char *str = expr;
+    return eval_expression(&str);
 }
 
 static int is_ifs(char c, const char *ifs) {
@@ -517,10 +527,7 @@ static char **expand_word_internal(const char *word, int allow_split) {
     const char *input = tilde_expanded;
     int saw_quotes = 0;
     
-    const char *ifs = var_get_value("IFS");
-    if (!ifs) {
-        ifs = " \t\n";
-    }
+    const char *ifs = ifsval();
     
     int in_quote = 0;
     int push_empty_at_end = !allow_split;
@@ -590,7 +597,7 @@ static char **expand_word_internal(const char *word, int allow_split) {
         } else if (input[i] == '$') {
             push_empty_at_end = 1;
             if (i + 1 < len && input[i+1] == '(' && i + 2 < len && input[i+2] == '(') {
-                // Arithmetic $((...))
+                // Arithmetic $((...))  
                 i += 3; // Skip $((
                 size_t start = i;
                 
@@ -748,7 +755,7 @@ static char **expand_word_internal(const char *word, int allow_split) {
                     
                     // If it's a length operation, get the value and append its length
                     if (is_length) {
-                        const char *val = var_get_value(var_name);
+                        const char *val = posish_var_get_value(var_name);
                         int length = val ? strlen(val) : 0;
                         char len_buf[32];
                         snprintf(len_buf, sizeof(len_buf), "%d", length);
@@ -825,9 +832,9 @@ static char **expand_word_internal(const char *word, int allow_split) {
                     } else if (strcmp(var_name, "-") == 0) {
                         var_value = "im";
                     } else if (isdigit(var_name[0])) {
-                        var_value = var_get_positional_value(atoi(var_name));
+                        var_value = posish_var_get_positional_value(atoi(var_name));
                     } else {
-                        var_value = var_get_value(var_name);
+                        var_value = posish_var_get_value(var_name);
                     }
                     
                     // Handle colon operators
@@ -852,8 +859,8 @@ static char **expand_word_internal(const char *word, int allow_split) {
                             case 3: // := Assign default if unset or null
                                 if (is_unset_or_null) {
                                     char *expanded_default = expand_word(default_value);
-                                    var_set(var_name, expanded_default);
-                                    var_value = var_get_value(var_name);
+                                    posish_var_set(var_name, expanded_default);
+                                    var_value = posish_var_get_value(var_name);
                                 }
                                 break;
                             case 4: // :? Error if unset or null
@@ -921,14 +928,14 @@ static char **expand_word_internal(const char *word, int allow_split) {
                     } else if (strcmp(var_name, "-") == 0) {
                         val = "im";
                     } else if (strcmp(var_name, "#") == 0) {
-                        static char buf[32]; snprintf(buf, sizeof(buf), "%d", var_get_positional_count());
+                        static char buf[32]; snprintf(buf, sizeof(buf), "%d", posish_var_get_positional_count());
                         val = buf;
                     } else if (strcmp(var_name, "!") == 0) {
-                        pid_t bg_pid = var_get_last_bg_pid();
+                        pid_t bg_pid = posish_var_get_last_bg_pid();
                         static char buf[32]; if (bg_pid > 0) snprintf(buf, sizeof(buf), "%d", bg_pid); else buf[0] = '\0';
                         val = buf;
                     } else if (strcmp(var_name, "@") == 0 || strcmp(var_name, "*") == 0) {
-                        char **args = var_get_all_positional();
+                        char **args = posish_var_get_all_positional();
                         if (args) {
                             size_t total_len = 0;
                             for (int k = 0; args[k]; k++) total_len += strlen(args[k]) + 1;
@@ -942,9 +949,9 @@ static char **expand_word_internal(const char *word, int allow_split) {
                             val = tmp_val; // This is stack allocated, so it's fine.
                         } else { val = ""; }
                     } else if (isdigit(var_name[0])) {
-                        val = var_get_positional_value(atoi(var_name));
+                        val = posish_var_get_positional_value(atoi(var_name));
                     } else {
-                        val = var_get_value(var_name);
+                        val = posish_var_get_value(var_name);
                     }
                     
                     if (val) {
@@ -1188,7 +1195,7 @@ static int execute_simple_command(ASTNode *node) {
     
     for (size_t i = 0; i < node->data.command.assignment_count; i++) {
         char *expanded_val = expand_word(node->data.command.assignments[i].value);
-        if (var_set(node->data.command.assignments[i].name, expanded_val) != 0) {
+        if (posish_var_set(node->data.command.assignments[i].name, expanded_val) != 0) {
             // Assignment failed (readonly variable)
             return 1;
         }
@@ -1246,9 +1253,9 @@ static int execute_simple_command(ASTNode *node) {
 
     // Trace mode (set -x) - Print expanded command
     if (shell_trace_mode && argv[0]) {
-        char *ps4 = var_get("PS4");
+        char *ps4 = posish_var_get("PS4");
         fprintf(stderr, "%s", ps4 ? ps4 : "+ ");
-        if (ps4) free(ps4); // var_get returns malloced string
+        if (ps4) free(ps4); // posish_var_get returns malloced string
         
         for (size_t i = 0; i < argc; i++) {
             if (i > 0) fprintf(stderr, " ");
@@ -1271,6 +1278,7 @@ static int execute_simple_command(ASTNode *node) {
 
         if (has_redirections && handle_redirections(node->data.command.redirections, node->data.command.redirection_count) != 0) {
             // No free needed for argv
+            buf_out_flush_all();
             dup2(saved_stdin, STDIN_FILENO);
             dup2(saved_stdout, STDOUT_FILENO);
             dup2(saved_stderr, STDERR_FILENO);
@@ -1281,31 +1289,32 @@ static int execute_simple_command(ASTNode *node) {
         }
 
         // Zero-copy save (just swap pointers)
-        PositionalSave saved_params = var_save_positional_fast();
+        PositionalSave saved_params = posish_var_save_positional_fast();
 
         if (argc > 1) {
-            var_set_positional(argc - 1, argv + 1);
+            posish_var_set_positional(argc - 1, argv + 1);
         } else {
-            var_set_positional(0, NULL);
+            posish_var_set_positional(0, NULL);
         }
         
         // Push scope for function-local variables
-        var_push_scope();
+        posish_var_push_scope();
         
         int status = executor_execute(func_body);
         
         // Pop scope to cleanup local variables
-        var_pop_scope();
+        posish_var_pop_scope();
         
         if (status == EXIT_RETURN) {
             status = func_return_status;
         }
         
         // Zero-copy restore (just swap back)
-        var_restore_positional_fast(saved_params);
+        posish_var_restore_positional_fast(saved_params);
 
         // Only restore FDs if we saved them
         if (has_redirections) {
+            buf_out_flush_all();
             dup2(saved_stdin, STDIN_FILENO);
             dup2(saved_stdout, STDOUT_FILENO);
             dup2(saved_stderr, STDERR_FILENO);
@@ -1336,6 +1345,7 @@ static int execute_simple_command(ASTNode *node) {
             // No free needed for argv
             
             if (!is_exec_no_args && has_redirections) {
+                buf_out_flush_all();
                 dup2(saved_stdin, STDIN_FILENO);
                 dup2(saved_stdout, STDOUT_FILENO);
                 dup2(saved_stderr, STDERR_FILENO);
@@ -1350,6 +1360,7 @@ static int execute_simple_command(ASTNode *node) {
         
         // Only restore FDs if we saved them
         if (!is_exec_no_args && has_redirections) {
+            buf_out_flush_all();
             dup2(saved_stdin, STDIN_FILENO);
             dup2(saved_stdout, STDOUT_FILENO);
             dup2(saved_stderr, STDERR_FILENO);
@@ -1371,6 +1382,7 @@ static int execute_simple_command(ASTNode *node) {
     }
 
     // OPTIMIZATION: Use vfork() instead of fork() for external commands
+    buf_out_flush_all();
     pid_t pid = vfork();
     if (pid == 0) {
         signal(SIGINT, SIG_DFL);
@@ -1384,7 +1396,7 @@ static int execute_simple_command(ASTNode *node) {
             _exit(1);  // Use _exit() with vfork()
         }
 
-        char **env = var_get_environ();
+        char **env = posish_var_get_environ();
         execve(executable, argv, env);
         // execve failed
         _exit(126);  // Use _exit() with vfork()
@@ -1396,7 +1408,7 @@ static int execute_simple_command(ASTNode *node) {
 
     setpgid(pid, pid);
     Job *j = job_add(pid, argv[0], JOB_RUNNING);
-    var_set_last_bg_pid(pid);
+    posish_var_set_last_bg_pid(pid);
     
     int status = job_wait(j);
     
@@ -1458,7 +1470,7 @@ static int execute_list(ASTNode *node) {
                 setpgid(pid, pid);
                 Job *j = job_add(pid, "background task", JOB_RUNNING);
                 printf("[%d] %d\n", j->id, pid);
-                var_set_last_bg_pid(pid);
+                posish_var_set_last_bg_pid(pid);
                 status = 0;
             }
         } else {
@@ -1519,7 +1531,7 @@ static int execute_for(ASTNode *node) {
             }
         }
     } else {
-        char **args = var_get_all_positional();
+        char **args = posish_var_get_all_positional();
         if (args) {
             for (int i = 0; args[i] != NULL; i++) {
                 items = mem_stack_realloc_array(items, item_count * sizeof(char*), (item_count + 1) * sizeof(char *), 1);
@@ -1536,7 +1548,7 @@ static int execute_for(ASTNode *node) {
         mem_stack_push_mark(&smark);
         
         signal_check_pending();
-        if (var_set(node->data.for_loop.var_name, items[i]) != 0) {
+        if (posish_var_set(node->data.for_loop.var_name, items[i]) != 0) {
             // Assignment failed (readonly variable)
             status = 1;
             mem_stack_pop_mark(&smark);
@@ -1847,7 +1859,7 @@ int executor_execute(ASTNode *node) {
     if (node->lineno > 0) {
         char buf[32];
         snprintf(buf, sizeof(buf), "%d", node->lineno);
-        var_set("LINENO", buf);
+        posish_var_set("LINENO", buf);
     }
 
     int status = 0;

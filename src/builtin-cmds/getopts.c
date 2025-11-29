@@ -29,7 +29,7 @@ int builtin_getopts(char **argv) {
     int silent_errors = (optstring[0] == ':');
     
     // Get OPTIND (starts at 1)
-    char *optind_str = var_get("OPTIND");
+    char *optind_str = posish_var_get("OPTIND");
     int optind = optind_str ? atoi(optind_str) : 1;
     if (optind_str) free(optind_str);
     
@@ -48,9 +48,9 @@ int builtin_getopts(char **argv) {
         for (parse_argc = 0; parse_argv[parse_argc]; parse_argc++);
     } else {
         // Parse positional parameters
-        parse_argv = var_get_all_positional();
+        parse_argv = posish_var_get_all_positional();
         if (!parse_argv) {
-            var_set(varname, "?");
+            posish_var_set(varname, "?");
             return 1;
         }
         for (parse_argc = 0; parse_argv[parse_argc]; parse_argc++);
@@ -58,7 +58,7 @@ int builtin_getopts(char **argv) {
     
     // Check if done
     if (optind > parse_argc) {
-        var_set(varname, "?");
+        posish_var_set(varname, "?");
         if (!argv[3] && parse_argv) {
             for (int i = 0; parse_argv[i]; i++) free(parse_argv[i]);
             free(parse_argv);
@@ -82,7 +82,7 @@ int builtin_getopts(char **argv) {
     if (nextchar == 0) {
         // Check for end of options
         if (!current_arg || current_arg[0] != '-' || !current_arg[1]) {
-            var_set(varname, "?");
+            posish_var_set(varname, "?");
             if (!argv[3] && parse_argv) {
                 for (int i = 0; parse_argv[i]; i++) free(parse_argv[i]);
                 free(parse_argv);
@@ -95,10 +95,10 @@ int builtin_getopts(char **argv) {
             // End of options, skip --
             char new_optind[32];
             snprintf(new_optind, sizeof(new_optind), "%d", optind + 1);
-            var_set("OPTIND", new_optind);
+            posish_var_set("OPTIND", new_optind);
             saved_optind = optind + 1;
             
-            var_set(varname, "?");
+            posish_var_set(varname, "?");
             if (!argv[3] && parse_argv) {
                 for (int i = 0; parse_argv[i]; i++) free(parse_argv[i]);
                 free(parse_argv);
@@ -118,12 +118,12 @@ int builtin_getopts(char **argv) {
     // Handle invalid option
     if (!opt_pos || opt_char == ':') {
         char opt_str[2] = {opt_char, '\0'};
-        var_set("OPTARG", ""); // Unset OPTARG (or set to empty)
+        posish_var_set("OPTARG", ""); // Unset OPTARG (or set to empty)
         if (silent_errors) {
-            var_set(varname, "?");
-            var_set("OPTARG", opt_str);
+            posish_var_set(varname, "?");
+            posish_var_set("OPTARG", opt_str);
         } else {
-            var_set(varname, "?");
+            posish_var_set(varname, "?");
             fprintf(stderr, "getopts: illegal option -- %c\n", opt_char);
         }
         
@@ -136,7 +136,7 @@ int builtin_getopts(char **argv) {
         
         char new_optind[32];
         snprintf(new_optind, sizeof(new_optind), "%d", optind);
-        var_set("OPTIND", new_optind);
+        posish_var_set("OPTIND", new_optind);
         saved_optind = optind;
         
         if (!argv[3] && parse_argv) {
@@ -148,28 +148,28 @@ int builtin_getopts(char **argv) {
     
     // Valid option
     char opt_str[2] = {opt_char, '\0'};
-    var_set(varname, opt_str);
+    posish_var_set(varname, opt_str);
     
     // Check if argument required
     if (opt_pos[1] == ':') {
         if (current_arg[nextchar + 1] != '\0') {
             // Argument is rest of current arg
-            var_set("OPTARG", &current_arg[nextchar + 1]);
+            posish_var_set("OPTARG", &current_arg[nextchar + 1]);
             optind++;
             nextchar = 0;
         } else if (optind < parse_argc) {
             // Argument is next arg
-            var_set("OPTARG", parse_argv[optind]);
+            posish_var_set("OPTARG", parse_argv[optind]);
             optind += 2;
             nextchar = 0;
         } else {
             // Missing argument
             if (silent_errors) {
-                var_set(varname, ":");
-                var_set("OPTARG", opt_str);
+                posish_var_set(varname, ":");
+                posish_var_set("OPTARG", opt_str);
             } else {
-                var_set(varname, "?");
-                var_set("OPTARG", "");
+                posish_var_set(varname, "?");
+                posish_var_set("OPTARG", "");
                 fprintf(stderr, "getopts: option requires an argument -- %c\n", opt_char);
             }
             // Even on error, we consume the option. 
@@ -181,7 +181,7 @@ int builtin_getopts(char **argv) {
         }
     } else {
         // No argument required
-        var_set("OPTARG", "");
+        posish_var_set("OPTARG", "");
         nextchar++;
         if (current_arg[nextchar] == '\0') {
             optind++;
@@ -192,7 +192,7 @@ int builtin_getopts(char **argv) {
     // Update OPTIND
     char new_optind[32];
     snprintf(new_optind, sizeof(new_optind), "%d", optind);
-    var_set("OPTIND", new_optind);
+    posish_var_set("OPTIND", new_optind);
     saved_optind = optind;
     
     if (!argv[3] && parse_argv) {

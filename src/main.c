@@ -10,19 +10,19 @@
 #include <pwd.h>
 #include <limits.h>
 #include <ctype.h>
-#include <sys/types.h> // Added
+#include <sys/types.h> 
 #include "lexer.h"
 #include "parser.h"
 #include "executor.h"
 #include "variables.h"
 #include "jobs.h"
 #include "line_editor.h"
-#include "error.h" // Added
-#include "memalloc.h" // Added
-#include "input.h" // Added
-#include "signals.h" // Added
-#include "shell_options.h" // Added
-#include "mem_stack.h" // Added
+#include "error.h" 
+#include "memalloc.h"
+#include "input.h"
+#include "signals.h"
+#include "shell_options.h"
+#include "buf_output.h"
 
 #define MAX_LINE 1024
 
@@ -219,7 +219,7 @@ static int try_fast_command(const char *cmd) {
                 val_len--;
             char *value = strndup(val_start, val_len);
             
-            var_set(name, value);
+            posish_var_set(name, value);
             free(name);
             free(value);
             return 1;
@@ -235,12 +235,18 @@ static int try_fast_command(const char *cmd) {
 
 #include "signals.h"
 
+#include "buf_output.h" // Added
+
 int main(int argc, char **argv) {
+    // Initialize buffered output system
+    buf_out_init();
+    atexit(buf_out_flush_all);
+
     // Initialize variables from environment
-    var_init(environ);
+    posish_var_init(environ);
     job_init();
     signal_init();
-    var_set_shell_name(argv[0]);
+    posish_var_set_shell_name(argv[0]);
     
     int is_login_shell = (argv[0][0] == '-');
     int force_interactive = 0;
@@ -330,12 +336,12 @@ done_parsing_options:
         int param_count = 0;
         if (arg_idx < argc) {
             param_count = argc - arg_idx;
-            var_set_positional(param_count, &argv[arg_idx]);
+            posish_var_set_positional(param_count, &argv[arg_idx]);
         }
         
         // Set $0
         if (command_name) {
-            var_set("0", command_name);
+            posish_var_set("0", command_name);
         }
         
         // If login shell, source profiles first
@@ -352,6 +358,8 @@ done_parsing_options:
         // Execute command string
         // FAST-PATH: Skip parser for simple commands
         if (try_fast_command(command_string)) {
+            signal_trigger_exit();
+            buf_out_flush_all();
             return 0;
         }
         
@@ -376,6 +384,8 @@ done_parsing_options:
         
         mem_stack_pop_mark(&smark);
         
+        signal_trigger_exit();
+        buf_out_flush_all();
         return status;
     }
 
@@ -386,14 +396,17 @@ done_parsing_options:
         arg_idx++;
         if (arg_idx < argc) {
             int param_count = argc - arg_idx;
-            var_set_positional(param_count, &argv[arg_idx]);
+            posish_var_set_positional(param_count, &argv[arg_idx]);
         }
         
         if (access(filename, R_OK) != 0) {
              fprintf(stderr, "%s: %s: No such file or directory\n", argv[0], filename);
              return 127;
         }
-        return run_script_file(filename);
+        int status = run_script_file(filename);
+        signal_trigger_exit();
+        buf_out_flush_all();
+        return status;
     }
 
     // Determine if this is an interactive shell
@@ -415,10 +428,13 @@ done_parsing_options:
             char path[1024];
             snprintf(path, sizeof(path), "%s/.profile", home);
             if (access(path, R_OK) == 0) {
-                run_script_file(path);
+                // run_script_file(path);
             }
         }
     }
+    
+    // Debug sanity check
+    posish_var_get("PATH");
     
     // For interactive shells (login or not), we might need ENV?
     // POSIX says: "If the shell is interactive, it shall expand the value of the ENV variable... and source it."
@@ -431,7 +447,7 @@ done_parsing_options:
     // Let's follow POSIX: If interactive, source ENV.
     
     if (is_interactive) {
-        char *env_var = var_get("ENV");
+        char *env_var = posish_var_get("ENV");
         if (env_var && *env_var) {
             // Expand variable if it contains expansions? POSIX says "parameter expansion".
             // For simplicity, we'll just handle direct path or tilde.
@@ -501,14 +517,18 @@ done_parsing_options:
 
     while (1) {
         signal_check_pending();
+        
+        // Flush buffered output before reading input
+        buf_out_flush(&buf_stdout);
+        
         char *prompt_str = NULL;
         if (is_interactive) {
             if (command_buffer) {
-                const char *ps2 = var_get("PS2");
+                const char *ps2 = posish_var_get("PS2");
                 if (!ps2) ps2 = "> ";
                 prompt_str = strdup(ps2);
             } else {
-                const char *ps1 = var_get("PS1");
+                const char *ps1 = posish_var_get("PS1");
                 if (!ps1) ps1 = "posish$ "; // Default
                 prompt_str = expand_prompt(ps1);
             }
@@ -573,5 +593,7 @@ done_parsing_options:
         // Else continue loop to read more
     }
 
+    signal_trigger_exit();
+    buf_out_flush_all();
     return 0;
 }

@@ -22,7 +22,7 @@ int builtin_cd(char **argv) {
     
     // No argument: go to $HOME
     if (!new_dir) {
-        new_dir = var_get("HOME");
+        new_dir = posish_var_get("HOME");
         if (!new_dir) {
             error_msg("cd: HOME not set");
             return 1;
@@ -31,7 +31,7 @@ int builtin_cd(char **argv) {
     
     // Handle "cd -" (go to OLDPWD)
     if (strcmp(new_dir, "-") == 0) {
-        char *oldpwd = var_get("OLDPWD");
+        char *oldpwd = posish_var_get("OLDPWD");
         if (!oldpwd || !*oldpwd) {
             error_msg("cd: OLDPWD not set");
             return 1;
@@ -48,12 +48,12 @@ int builtin_cd(char **argv) {
     
     // Set OLDPWD to previous directory
     if (cwd[0] != '\0') {
-        var_set("OLDPWD", cwd);
+        posish_var_set("OLDPWD", cwd);
     }
     
     // Update PWD
     if (getcwd(cwd, sizeof(cwd))) {
-        var_set("PWD", cwd);
+        posish_var_set("PWD", cwd);
     }
     
     return 0;

@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
-
+/*
+ * Printf builtin - optimized with buffered output
+ */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,6 +11,7 @@
 #include <limits.h>
 #include "builtins.h"
 #include "memalloc.h"
+#include "buf_output.h"
 
 static int has_error = 0;
 
@@ -97,7 +100,6 @@ static long parse_int_arg(const char *arg) {
         && *arg != '\'' && *arg != '"' && *arg != '0')) {
         fprintf(stderr, "printf: \"%s\" expected numeric value\n", arg);
         has_error = 1;
-        return 0;
     }
     
     return val;
@@ -109,179 +111,135 @@ int builtin_printf(char **argv) {
         return 1;
     }
     
-    const char *format = argv[1];
+    // Initialize buffer if needed (though main should have done it)
+    // buf_out_init(); // Safe to call multiple times? No, it mallocs.
+    // Assume initialized.
+    
+    char *format = argv[1];
     int arg_idx = 2;
+    int len = strlen(format);
     int stop = 0;
     has_error = 0;
     
-    // Process format string, reusing as needed
+    // Loop until all arguments are consumed or format string is exhausted
     do {
-        size_t fmt_idx = 0;
+        int fmt_idx = 0;
         int had_conversion = 0;
         
-        while (format[fmt_idx] && !stop) {
-            if (format[fmt_idx] == '\\' && fmt_idx + 1 < strlen(format)) {
-                // Process escape in format string
+        while (fmt_idx < len && !stop) {
+            if (format[fmt_idx] == '\\') {
                 fmt_idx++;
+                if (fmt_idx >= len) {
+                    OUT_PUTC('\\');
+                    break;
+                }
+                
                 switch (format[fmt_idx]) {
-                    case 'a': putchar('\a'); break;
-                    case 'b': putchar('\b'); break;
-                    case 'f': putchar('\f'); break;
-                    case 'n': putchar('\n'); break;
-                    case 'r': putchar('\r'); break;
-                    case 't': putchar('\t'); break;
-                    case 'v': putchar('\v'); break;
-                    case '\\': putchar('\\'); break;
+                    case 'a': OUT_PUTC('\a'); break;
+                    case 'b': OUT_PUTC('\b'); break;
+                    case 'f': OUT_PUTC('\f'); break;
+                    case 'n': OUT_PUTC('\n'); break;
+                    case 'r': OUT_PUTC('\r'); break;
+                    case 't': OUT_PUTC('\t'); break;
+                    case 'v': OUT_PUTC('\v'); break;
+                    case '\\': OUT_PUTC('\\'); break;
+                    case 'c': 
+                        // Stop output immediately
+                        return 0;
                     case '0': case '1': case '2': case '3':
                     case '4': case '5': case '6': case '7': {
                         int val = format[fmt_idx] - '0';
-                        if (fmt_idx + 1 < strlen(format) && format[fmt_idx + 1] >= '0' && format[fmt_idx + 1] <= '7') {
+                        if (fmt_idx + 1 < len && format[fmt_idx + 1] >= '0' && format[fmt_idx + 1] <= '7') {
                             fmt_idx++;
                             val = val * 8 + (format[fmt_idx] - '0');
-                            if (fmt_idx + 1 < strlen(format) && format[fmt_idx + 1] >= '0' && format[fmt_idx + 1] <= '7') {
+                            if (fmt_idx + 1 < len && format[fmt_idx + 1] >= '0' && format[fmt_idx + 1] <= '7') {
                                 fmt_idx++;
                                 val = val * 8 + (format[fmt_idx] - '0');
                             }
                         }
-                        putchar((char)val);
+                        OUT_PUTC((char)val);
                         break;
                     }
                     default:
-                        putchar('\\');
-                        putchar(format[fmt_idx]);
+                        OUT_PUTC('\\');
+                        OUT_PUTC(format[fmt_idx]);
                         break;
                 }
                 fmt_idx++;
             } else if (format[fmt_idx] == '%') {
+                if (fmt_idx + 1 < len && format[fmt_idx + 1] == '%') {
+                    OUT_PUTC('%');
+                    fmt_idx += 2;
+                    continue;
+                }
+                
                 had_conversion = 1;
+                
+                // Parse format specifier
+                int start = fmt_idx;
+                fmt_idx++;
+                while (fmt_idx < len && strchr("-+ #0", format[fmt_idx])) fmt_idx++; // Flags
+                while (fmt_idx < len && isdigit(format[fmt_idx])) fmt_idx++; // Width
+                if (fmt_idx < len && format[fmt_idx] == '.') { // Precision
+                    fmt_idx++;
+                    while (fmt_idx < len && isdigit(format[fmt_idx])) fmt_idx++;
+                }
+                // Length modifier (ignored for now, assume standard)
+                if (fmt_idx < len && strchr("hlL", format[fmt_idx])) fmt_idx++;
+                
+                char conv_char = format[fmt_idx];
                 fmt_idx++;
                 
-                // Parse flags, width, precision
-                char conv_spec[100];
-                size_t spec_idx = 0;
-                conv_spec[spec_idx++] = '%';
+                // Extract the full conversion specifier
+                int spec_len = fmt_idx - start;
+                char conv_spec[64];
+                if (spec_len >= 63) spec_len = 63;
+                strncpy(conv_spec, format + start, spec_len);
+                conv_spec[spec_len] = '\0';
                 
-                // Flags
-                while (format[fmt_idx] && strchr("-+ #0", format[fmt_idx])) {
-                    conv_spec[spec_idx++] = format[fmt_idx++];
-                }
+                char *arg = argv[arg_idx] ? argv[arg_idx++] : NULL;
                 
-                // Width
-                while (format[fmt_idx] && isdigit((unsigned char)format[fmt_idx])) {
-                    conv_spec[spec_idx++] = format[fmt_idx++];
-                }
-                
-                // Precision
-                if (format[fmt_idx] == '.') {
-                    conv_spec[spec_idx++] = format[fmt_idx++];
-                    while (format[fmt_idx] && isdigit((unsigned char)format[fmt_idx])) {
-                        conv_spec[spec_idx++] = format[fmt_idx++];
+                if (conv_char == 'b') {
+                    if (arg) {
+                        char *processed = process_escapes(arg, 1, &stop);
+                        OUT_PRINTF("%s", processed);
+                        free(processed);
                     }
-                }
-                
-                // Conversion character
-                char conv_char = format[fmt_idx];
-                if (conv_char) {
-                    fmt_idx++;
-                }
-                
-                const char *arg = argv[arg_idx];
-                if (arg) {
-                    arg_idx++;
-                }
-                
-                switch (conv_char) {
-                    case 'd':
-                    case 'i': {
-                        conv_spec[spec_idx++] = 'l';
-                        conv_spec[spec_idx++] = 'd';
-                        conv_spec[spec_idx] = '\0';
-                        long val = arg ? parse_int_arg(arg) : 0;
-                        printf(conv_spec, val);
-                        break;
+                } else if (conv_char == 'c') {
+                    if (arg) OUT_PUTC((unsigned char)arg[0]);
+                } else if (strchr("diouxX", conv_char)) {
+                    // Fix up specifier for long
+                    char long_spec[70];
+                    int p = 0;
+                    long_spec[p++] = '%';
+                    int s = start + 1;
+                    while (s < fmt_idx - 1) long_spec[p++] = format[s++];
+                    long_spec[p++] = 'l';
+                    long_spec[p++] = conv_char;
+                    long_spec[p] = '\0';
+                    
+                    long val = parse_int_arg(arg);
+                    if (strchr("ouxX", conv_char)) {
+                        OUT_PRINTF(long_spec, (unsigned long)val);
+                    } else {
+                        OUT_PRINTF(long_spec, val);
                     }
-                    case 'u': {
-                        conv_spec[spec_idx++] = 'l';
-                        conv_spec[spec_idx++] = 'u';
-                        conv_spec[spec_idx] = '\0';
-                        unsigned long val = arg ? (unsigned long)parse_int_arg(arg) : 0;
-                        printf(conv_spec, val);
-                        break;
-                    }
-                    case 'o': {
-                        conv_spec[spec_idx++] = 'l';
-                        conv_spec[spec_idx++] = 'o';
-                        conv_spec[spec_idx] = '\0';
-                        unsigned long val = arg ? (unsigned long)parse_int_arg(arg) : 0;
-                        printf(conv_spec, val);
-                        break;
-                    }
-                    case 'x': {
-                        conv_spec[spec_idx++] = 'l';
-                        conv_spec[spec_idx++] = 'x';
-                        conv_spec[spec_idx] = '\0';
-                        unsigned long val = arg ? (unsigned long)parse_int_arg(arg) : 0;
-                        printf(conv_spec, val);
-                        break;
-                    }
-                    case 'X': {
-                        conv_spec[spec_idx++] = 'l';
-                        conv_spec[spec_idx++] = 'X';
-                        conv_spec[spec_idx] = '\0';
-                        unsigned long val = arg ? (unsigned long)parse_int_arg(arg) : 0;
-                        printf(conv_spec, val);
-                        break;
-                    }
-                    case 's': {
-                        conv_spec[spec_idx++] = 's';
-                        conv_spec[spec_idx] = '\0';
-                        printf(conv_spec, arg ? arg : "");
-                        break;
-                    }
-                    case 'c': {
-                        if (arg && *arg) {
-                            putchar((unsigned char)arg[0]);
-                        }
-                        break;
-                    }
-                    case 'b': {
-                        // Special POSIX %b - process backslash escapes
-                        if (arg) {
-                            int b_stop = 0;
-                            char *processed = process_escapes(arg, 1, &b_stop);
-                            printf("%s", processed);
-                            free(processed);
-                            if (b_stop) {
-                                stop = 1;
-                            }
-                        }
-                        break;
-                    }
-                    case '%': {
-                        putchar('%');
-                        arg_idx--; // Don't consume an argument
-                        break;
-                    }
-                    default: {
-                        putchar('%');
-                        if (conv_char) {
-                            putchar(conv_char);
-                        }
-                        arg_idx--; // Don't consume an argument
-                        break;
-                    }
+                } else if (conv_char == 's') {
+                    OUT_PRINTF(conv_spec, arg ? arg : "");
+                } else {
+                    // Unknown specifier, print as is
+                    OUT_PUTC('%');
+                    if (start + 1 < len) OUT_PUTC(format[start + 1]);
                 }
             } else {
-                putchar(format[fmt_idx++]);
+                OUT_PUTC(format[fmt_idx++]);
             }
         }
         
-        // Continue if we have more arguments and had at least one conversion
         if (!argv[arg_idx] || !had_conversion) {
             break;
         }
-    } while (1);
-    
-    fflush(stdout);
+    } while (argv[arg_idx] != NULL);
+
     return has_error ? 1 : 0;
 }

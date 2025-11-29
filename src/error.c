@@ -6,11 +6,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include "buf_output.h"
 
 #include "variables.h"
 
 static void print_prefix(void) {
-    char *name = var_get_shell_name();
+    char *name = posish_var_get_shell_name();
     if (name) {
         error_printf("%s: ", name);
         free(name);
@@ -44,5 +45,6 @@ void error_fatal(const char *fmt, ...) {
     error_vprintf(fmt, ap);
     va_end(ap);
     error_printf("\n");
+    buf_out_flush_all();
     exit(1);
 }

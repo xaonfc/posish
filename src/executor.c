@@ -792,8 +792,9 @@ static char **expand_word_internal(const char *word, int allow_split) {
                             strncpy(default_value, input + val_start, val_len);
                             default_value[val_len] = '\0';
                         } else {
-                            // Just ':' without operator, skip to }
-                            while (i < len && input[i] != '}') i++;
+                            // Invalid syntax like ${var:2} (ksh/bash substring not supported)
+                            error_msg("Bad substitution");
+                            exit(2);
                         }
                     } else if (i < len && (input[i] == '%' || input[i] == '#')) {
                         char op_char = input[i];

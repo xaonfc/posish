@@ -46,7 +46,7 @@ void sigchld_handler(int sig) {
 }
 
 char *expand_prompt(const char *ps1) {
-    if (!ps1) return strdup("posish$ ");
+    if (!ps1) return strdup(geteuid() == 0 ? "# " : "$ ");
     
     char *buffer = malloc(MAX_LINE);
     if (!buffer) return NULL;
@@ -131,7 +131,7 @@ char *expand_prompt(const char *ps1) {
 
 void print_prompt() {
     if (isatty(STDIN_FILENO)) {
-        printf("posish$ ");
+        printf(geteuid() == 0 ? "# " : "$ ");
         fflush(stdout);
     }
 }
@@ -529,7 +529,7 @@ done_parsing_options:
                 prompt_str = strdup(ps2);
             } else {
                 const char *ps1 = posish_var_get("PS1");
-                if (!ps1) ps1 = "posish$ "; // Default
+                if (!ps1) ps1 = geteuid() == 0 ? "# " : "$ "; // Default: # for root, $ for user
                 prompt_str = expand_prompt(ps1);
             }
         }

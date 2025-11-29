@@ -171,6 +171,8 @@ static int handle_redirections(Redirection *redirs, size_t count) {
 
 #include "parser.h"
 
+static int is_safe_for_vfork(ASTNode *node);
+
 static char *execute_subshell_capture(const char *cmd_str) {
     // ULTRA-FAST path: Skip parsing for known zero-output builtins
     // This avoids lexer/parser overhead for the most common cases
@@ -277,9 +279,18 @@ static char *execute_subshell_capture(const char *cmd_str) {
         return mem_stack_strdup("");
     }
 
-    // OPTIMIZATION: Use vfork() instead of fork() for command substitution
-    // This avoids expensive page table copy for what is essentially an exec path
-    pid_t pid = vfork();
+    // CRITICAL: Flush buffers before fork to prevent child from inheriting and flushing
+    // parent's buffered output into the capture pipe.
+    buf_out_flush_all();
+
+    // Use vfork() if safe (no state modification), otherwise fork()
+    // CRITICAL: Must check safety because vfork shares memory with parent!
+    pid_t pid;
+    if (is_safe_for_vfork(node)) {
+        pid = vfork();
+    } else {
+        pid = fork();
+    }
     if (pid == 0) {
         close(pipefd[0]);
         dup2(pipefd[1], STDOUT_FILENO);

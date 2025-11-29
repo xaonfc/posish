@@ -518,7 +518,15 @@ done_parsing_options:
         if (command_buffer) {
             size_t old_len = strlen(command_buffer);
             size_t new_len = strlen(line);
-            command_buffer = realloc(command_buffer, old_len + new_len + 1);
+            char *new_buffer = realloc(command_buffer, old_len + new_len + 1);
+            if (!new_buffer) {
+                fprintf(stderr, "%s: out of memory\n", argv[0]);
+                free(line);
+                free(command_buffer);
+                command_buffer = NULL;
+                break;
+            }
+            command_buffer = new_buffer;
             strcat(command_buffer, line);
             free(line);
         } else {

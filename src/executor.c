@@ -1003,6 +1003,15 @@ static char **expand_word_internal(const char *word, int allow_split) {
                         while (i < len && (isalnum(input[i]) || input[i] == '_')) i++;
                     }
                     var_len = i - start;
+                    
+                    // If variable name is empty, treat $ as literal
+                    if (var_len == 0) {
+                        sb_append(&sb, '$');
+                        free(var_name);
+                        var_name = NULL;
+                        continue;
+                    }
+                    
                     var_name = xmalloc(var_len + 1);
                     strncpy(var_name, input + start, var_len);
                     var_name[var_len] = '\0';
@@ -1082,7 +1091,8 @@ static char **expand_word_internal(const char *word, int allow_split) {
                             sb_append_str(&sb, val);
                         }
                     }
-                    // free(var_name); // No free needed (stack allocated)
+                    free(var_name); // Free xmalloc'd var_name
+                    var_name = NULL;
                 }
             }
         } else if (input[i] == '`') {

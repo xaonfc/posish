@@ -1,746 +1,222 @@
-# posish Builtin Commands Reference
+# Builtin Commands Reference
 
-Complete reference for all builtin commands in posish.
-
-## Table of Contents
-
-- [Core Builtins](#core-builtins)
-- [Control Flow](#control-flow)
-- [Job Control](#job-control)
-- [Variables & Functions](#variables--functions)
-- [Utility Commands](#utility-commands)
-
----
+This document provides a technical reference for all builtin commands implemented in **posish**.
 
 ## Core Builtins
 
 ### `:` (colon)
-Null command. Does nothing, returns success (0).
+Null command. Performs no operation.
 
-**Usage:**
-```bash
-:
-```
-
-**Example:**
-```bash
-: ${VAR:=default}  # Set VAR if unset, discard output
-while :; do        # Infinite loop
-    echo "Running..."
-done
-```
-
----
+- **Syntax**: `:`
+- **Exit Status**: Always returns 0.
 
 ### `.` (dot)
-Source/execute commands from a file in the current shell environment.
+Executes commands from a file in the current shell environment.
 
-**Usage:**
-```bash
-. filename [arguments...]
-```
+- **Syntax**: `. filename [arguments...]`
+- **Exit Status**: Returns the exit status of the last command executed, or 0 if no commands are executed. Returns >0 if file cannot be read.
 
-**Example:**
-```bash
-. ~/.profile
-. ./functions.sh
-. config.sh arg1 arg2
-```
+### `cd`
+Changes the current working directory.
 
----
+- **Syntax**: `cd [-L|-P] [directory]`
+- **Options**:
+    - `-L`: Use logical path (default).
+    - `-P`: Use physical path (resolve symlinks).
+    - `-`: Switch to previous directory (`$OLDPWD`).
+- **Exit Status**: 0 on success, >0 on error.
 
-### cd
-Change the current working directory.
+### `echo`
+Writes arguments to standard output, followed by a newline.
 
-**Usage:**
-```bash
-cd [directory]
-cd -
-```
+- **Syntax**: `echo [string...]`
+- **Behavior**: XSI-compliant (interprets escape sequences like `\n`, `\t`).
+- **Exit Status**: Always returns 0.
 
-**Options:**
-- No argument: Change to `$HOME`
-- `-`: Change to previous directory (`$OLDPWD`)
+### `exit`
+Terminates the shell execution.
 
-**Example:**
-```bash
-cd /tmp
-cd ..
-cd ~user
-cd -           # Toggle between current and previous dir
-```
+- **Syntax**: `exit [n]`
+- **Arguments**: `n` is the exit status (0-255). If omitted, uses the status of the last executed command.
+- **Exit Status**: Does not return (terminates process).
 
----
+### `export`
+Marks variables for export to the environment of subsequently executed commands.
 
-### echo
-Write arguments to standard output.
+- **Syntax**: `export [-p] [name[=value]...]`
+- **Options**: `-p` lists all exported variables.
+- **Exit Status**: 0 on success.
 
-**Usage:**
-```bash
-echo [string...]
-```
+### `pwd`
+Prints the absolute pathname of the current working directory.
 
-**Example:**
-```bash
-echo Hello, World!
-echo "Line 1" "Line 2"
-echo $VAR
-```
+- **Syntax**: `pwd [-L|-P]`
+- **Options**:
+    - `-L`: Logical path (default).
+    - `-P`: Physical path.
+- **Exit Status**: 0 on success, >0 on error.
 
----
+### `read`
+Reads a line from standard input and assigns fields to variables.
 
-### exit
-Exit the shell with specified status.
+- **Syntax**: `read [-r] var...`
+- **Options**: `-r` disables backslash escape processing (raw mode).
+- **Exit Status**: 0 on success, >0 on EOF or error.
 
-**Usage:**
-```bash
-exit [n]
-```
+### `unset`
+Unsets values and attributes of variables and functions.
 
-**Options:**
-- `n`: Exit status (0-255), defaults to status of last command
-
-**Example:**
-```bash
-exit 0
-exit 1
-exit $?
-```
-
----
-
-### export
-Mark variables for export to child processes.
-
-**Usage:**
-```bash
-export [name[=value]...]
-```
-
-**Example:**
-```bash
-export PATH=/usr/bin:/bin
-export EDITOR=vim
-VAR=value; export VAR
-export -p              # List all exported variables
-```
-
----
-
-### pwd
-Print the current working directory.
-
-**Usage:**
-```bash
-pwd [-L|-P]
-```
-
-**Options:**
-- `-L`: Logical path (default, uses `$PWD`)
-- `-P`: Physical path (resolve symlinks)
-
-**Example:**
-```bash
-pwd
-pwd -P
-```
-
----
-
-### read
-Read a line from standard input into variables.
-
-**Usage:**
-```bash
-read [-r] var...
-```
-
-**Options:**
-- `-r`: Raw mode (don't treat backslash as escape)
-
-**Example:**
-```bash
-read NAME
-echo "Hello, $NAME"
-
-read -r LINE          # Don't interpret backslashes
-while read -r line; do
-    echo "$line"
-done < file.txt
-```
-
----
-
-### unset
-Unset variables or functions.
-
-**Usage:**
-```bash
-unset [-v|-f] name...
-```
-
-**Options:**
-- `-v`: Unset variable (default)
-- `-f`: Unset function
-
-**Example:**
-```bash
-unset VAR
-unset -f function_name
-```
-
----
+- **Syntax**: `unset [-v|-f] name...`
+- **Options**:
+    - `-v`: Unset variable (default).
+    - `-f`: Unset function.
+- **Exit Status**: 0 on success.
 
 ## Control Flow
 
-### break
-Exit from `for`, `while`, `until`, or `case` loop.
+### `break`
+Exits from a `for`, `while`, `until`, or `case` loop.
 
-**Usage:**
-```bash
-break [n]
-```
+- **Syntax**: `break [n]`
+- **Arguments**: `n` is the number of nested loops to break out of (default 1).
+- **Exit Status**: 0 on success.
 
-**Options:**
-- `n`: Exit from `n` enclosing loops (default: 1)
+### `continue`
+Resumes the next iteration of a `for`, `while`, `until`, or `case` loop.
 
-**Example:**
-```bash
-while true; do
-    if [ condition ]; then
-        break
-    fi
-done
-```
+- **Syntax**: `continue [n]`
+- **Arguments**: `n` is the number of nested loops to resume (default 1).
+- **Exit Status**: 0 on success.
 
----
+### `return`
+Returns from a function or dot script.
 
-### continue
-Skip to next iteration of loop.
-
-**Usage:**
-```bash
-continue [n]
-```
-
-**Options:**
-- `n`: Skip `n` enclosing loops (default: 1)
-
-**Example:**
-```bash
-for file in *; do
-    [ -f "$file" ] || continue
-    echo "Processing $file"
-done
-```
-
----
-
-### return
-Return from a shell function.
-
-**Usage:**
-```bash
-return [n]
-```
-
-**Options:**
-- `n`: Return status (0-255), defaults to status of last command
-
-**Example:**
-```bash
-myfunc() {
-    [ $# -eq 0 ] && return 1
-    echo "Processing $1"
-    return 0
-}
-```
-
----
+- **Syntax**: `return [n]`
+- **Arguments**: `n` is the return status. If omitted, uses the status of the last executed command.
+- **Exit Status**: Returns `n`.
 
 ## Job Control
 
-### bg
-Resume suspended jobs in the background.
+### `bg`
+Resumes suspended jobs in the background.
 
-**Usage:**
-```bash
-bg [jobspec...]
-```
+- **Syntax**: `bg [jobspec...]`
+- **Exit Status**: 0 on success.
 
-**Example:**
-```bash
-bg %1
-bg %2 %3
-```
+### `fg`
+Moves jobs to the foreground.
 
----
+- **Syntax**: `fg [jobspec]`
+- **Exit Status**: Returns the exit status of the command placed in the foreground.
 
-### fg
-Bring jobs to the foreground.
+### `jobs`
+Lists active jobs.
 
-**Usage:**
-```bash
-fg [jobspec]
-```
+- **Syntax**: `jobs [-l|-p] [jobspec...]`
+- **Exit Status**: 0 on success.
 
-**Example:**
-```bash
-fg %1
-fg %%           # Current job
-```
+### `kill`
+Sends a signal to a process or job.
 
----
+- **Syntax**:
+    - `kill [-s sigspec | -n signum | -sigspec] pid|jobspec...`
+    - `kill -l [exit_status]`
+- **Exit Status**: 0 if at least one signal was sent successfully.
 
-### jobs
-List active jobs.
+### `wait`
+Waits for the specified process or job to complete and returns its exit status.
 
-**Usage:**
-```bash
-jobs [jobspec...]
-```
-
-**Example:**
-```bash
-jobs
-# [1]   Running    sleep 100 &
-# [2] Running    ./long_task &
-```
-
----
-
-### kill
-Send signal to processes or jobs.
-
-**Usage:**
-```bash
-kill [-s sigspec | -n signum | -sigspec] pid|jobspec...
-kill -l [exit_status]
-```
-
-**Options:**
-- `-s sigspec`: Send signal by name
-- `-n signum`: Send signal by number
-- `-sigspec`: Send signal (e.g., `-TERM`)
-- `-l`: List signal names
-
-**Example:**
-```bash
-kill 1234
-kill %1
-kill -9 1234
-kill -TERM %1
-kill -l          # List signals
-```
-
----
-
-### wait
-Wait for job completion.
-
-**Usage:**
-```bash
-wait [pid|jobspec...]
-```
-
-**Example:**
-```bash
-sleep 10 &
-PID=$!
-wait $PID
-echo "Done"
-
-# Wait for all background jobs
-wait
-```
-
----
-
-## Variables & Functions
-
-### alias
-Define or display command aliases.
-
-**Usage:**
-```bash
-alias [name[=value]...]
-```
-
-**Example:**
-```bash
-alias ll='ls -l'
-alias la='ls -la'
-alias                # List all aliases
-```
-
----
-
-### command
-Execute command bypassing function lookup.
-
-**Usage:**
-```bash
-command [-p] [-v|-V] command [arguments...]
-```
-
-**Options:**
-- `-p`: Use default PATH
-- `-v`: Print pathname of command
-- `-V`: Verbose description
-
-**Example:**
-```bash
-command ls          # Run /bin/ls, not function
-command -v ls       # Show path to ls
-```
-
----
-
-### eval
-Evaluate arguments as shell command.
-
-**Usage:**
-```bash
-eval [argument...]
-```
-
-**Example:**
-```bash
-CMD='echo hello'
-eval "$CMD"
-
-VAR=MY_VAR
-eval echo \$$VAR     # Echo value of $MY_VAR
-```
-
----
-
-### exec
-Replace shell with command, or modify file descriptors.
-
-**Usage:**
-```bash
-exec [-c] [command [arguments...]]
-```
-
-**Example:**
-```bash
-exec ls             # Replace shell with ls
-exec 2>error.log   # Redirect stderr for rest of script
-exec 3<input.txt    # Open file descriptor 3
-```
-
----
-
-### getopts
-Parse command options.
-
-**Usage:**
-```bash
-getopts optstring name [args...]
-```
-
-**Example:**
-```bash
-while getopts "abc:" opt; do
-    case $opt in
-        a) echo "Option -a" ;;
-        b) echo "Option -b" ;;
-        c) echo "Option -c: $OPTARG" ;;
-        \?) echo "Invalid option" >&2; exit 1 ;;
-    esac
-done
-```
-
----
-
-### local
-Declare local variables in functions.
-
-**Usage:**
-```bash
-local [name[=value]...]
-```
-
-**Example:**
-```bash
-myfunc() {
-    local VAR="local value"
-    echo "$VAR"
-}
-```
-
----
-
-### readonly
-Mark variables as read-only.
-
-**Usage:**
-```bash
-readonly [name[=value]...]
-```
-
-**Example:**
-```bash
-readonly PI=3.14159
-readonly HOSTNAME
-readonly -p         # List readonly variables
-```
-
----
-
-### set
-Set or unset shell options and positional parameters.
-
-**Usage:**
-```bash
-set [--] [arguments...]
-set [-+]eoption
-
-```
-
-**Options:**
-- `-x`: Enable trace mode
-- `+x`: Disable trace mode
-- `-e`: Exit on error
-- `-v`: Verbose mode
-- `--`: End options, set positional parameters
-
-**Example:**
-```bash
-set -x              # Enable trace
-set +x              # Disable trace
-set -- arg1 arg2    # Set $1=arg1, $2=arg2
-set                 # List all variables
-```
-
----
-
-### shift
-Shift positional parameters.
-
-**Usage:**
-```bash
-shift [n]
-```
-
-**Options:**
-- `n`: Shift by `n` positions (default: 1)
-
-**Example:**
-```bash
-# $1=a, $2=b, $3=c
-shift
-# Now $1=b, $2=c
-```
-
----
-
-### typeset
-Declare variables with attributes (compatibility alias).
-
-**Usage:**
-```bash
-typeset [name[=value]...]
-```
-
-**Example:**
-```bash
-typeset VAR=value
-```
-
----
-
-### unalias
-Remove alias definitions.
-
-**Usage:**
-```bash
-unalias name...
-```
-
-**Example:**
-```bash
-unalias ll
-unalias -a          # Remove all aliases
-```
-
----
+- **Syntax**: `wait [pid|jobspec...]`
+- **Exit Status**: Returns the exit status of the waited-for command.
 
 ## Utility Commands
 
-### false
-Return failure status (1).
+### `alias`
+Defines or displays aliases.
 
-**Usage:**
-```bash
-false
-```
+- **Syntax**: `alias [name[=value]...]`
+- **Exit Status**: 0 on success.
 
-**Example:**
-```bash
-false || echo "This runs"
-```
+### `command`
+Executes a simple command, suppressing shell function lookup.
 
----
+- **Syntax**: `command [-p] [-v|-V] command [arg...]`
+- **Exit Status**: Returns the exit status of `command`.
 
-### printf
-Format and print data.
+### `eval`
+Constructs a command by concatenating arguments and executes it.
 
-**Usage:**
-```bash
-printf format [arguments...]
-```
+- **Syntax**: `eval [arg...]`
+- **Exit Status**: Returns the exit status of the executed command.
 
-**Format Specifiers:**
-- `%s`: String
-- `%d`, `%i`: Integer
-- `%o`: Octal
-- `%x`, `%X`: Hexadecimal
-- `%c`: Character
-- `%b`: String with backslash escapes
-- `%%`: Literal %
+### `exec`
+Replaces the shell process with the specified command, or modifies file descriptors.
 
-**Example:**
-```bash
-printf "Hello, %s!\n" "World"
-printf "%d + %d = %d\n" 5 3 8
-printf "%x\n" 255        # ff
-printf "%b\n" "Line1\nLine2"
-```
+- **Syntax**: `exec [-c] [command [arg...]]`
+- **Exit Status**: Does not return if command is executed. Returns 0 if only redirections are performed.
 
----
+### `getopts`
+Parses positional parameters for options.
 
-### test / [
-Evaluate conditional expressions.
+- **Syntax**: `getopts optstring name [arg...]`
+- **Exit Status**: 0 if an option is found, >0 if end of options.
 
-**Usage:**
-```bash
-test expression
-[ expression ]
-```
+### `printf`
+Writes formatted output.
 
-**File Tests:**
-- `-f file`: File exists and is regular file
-- `-d file`: File exists and is directory
-- `-e file`: File exists
-- `-r file`: File is readable
-- `-w file`: File is writable  
-- `-x file`: File is executable
-- `-s file`: File exists and has size > 0
+- **Syntax**: `printf format [argument...]`
+- **Exit Status**: 0 on success, >0 on error.
 
-**String Tests:**
-- `-z string`: String is empty
-- `-n string`: String is not empty
-- `s1 = s2`: Strings are equal
-- `s1 != s2`: Strings are not equal
+### `set`
+Sets or unsets shell options and positional parameters.
 
-**Numeric Tests:**
-- `n1 -eq n2`: Equal
-- `n1 -ne n2`: Not equal
-- `n1 -lt n2`: Less than
-- `n1 -le n2`: Less than or equal
-- `n1 -gt n2`: Greater than
-- `n1 -ge n2`: Greater than or equal
+- **Syntax**: `set [-abCefhimnuvx] [-o option] [arg...]`
+- **Exit Status**: 0 on success.
 
-**Example:**
-```bash
-if [ -f file.txt ]; then echo "File exists"; fi
-if [ "$VAR" = "value" ]; then echo "Match"; fi
-if [ $NUM -gt 10 ]; then echo "Greater than 10"; fi
-```
+### `shift`
+Shifts positional parameters to the left.
 
----
+- **Syntax**: `shift [n]`
+- **Exit Status**: 0 on success, >0 if `n` exceeds `$#`.
 
-### times
-Print accumulated process times.
+### `test` / `[`
+Evaluates conditional expressions.
 
-**Usage:**
-```bash
-times
-```
+- **Syntax**: `test expression` or `[ expression ]`
+- **Exit Status**: 0 if expression is true, 1 if false, >1 on error.
 
-**Example:**
-```bash
-times
-# 0m0.01s 0m0.01s
-# 0m0.05s 0m0.03s
-# (user and system time for shell and children)
-```
+### `times`
+Prints the accumulated user and system times for the shell and its children.
 
----
+- **Syntax**: `times`
+- **Exit Status**: 0.
 
-### trap
-Set signal handlers.
+### `trap`
+Sets action to be taken on receipt of a signal.
 
-**Usage:**
-```bash
-trap [-l] [action condition...]
-```
+- **Syntax**: `trap [action condition...]`
+- **Exit Status**: 0 on success.
 
-**Options:**
-- `-l`: List signal names
+### `true`
+Does nothing, successfully.
 
-**Example:**
-```bash
-trap 'echo Interrupted' INT
-trap 'cleanup; exit' EXIT
-trap - INT              # Reset INT to default
-trap '' INT             # Ignore INT
-trap -l                 # List signals
-```
+- **Syntax**: `true`
+- **Exit Status**: Always returns 0.
 
----
+### `type`
+Indicates how each name would be interpreted if used as a command name.
 
-### true
-Return success status (0).
+- **Syntax**: `type name...`
+- **Exit Status**: 0 if all names are found, >0 if any are not found.
 
-**Usage:**
-```bash
-true
-```
+### `umask`
+Sets the file mode creation mask.
 
-**Example:**
-```bash
-while true; do
-    echo "Infinite loop"
-done
-```
+- **Syntax**: `umask [-S] [mask]`
+- **Exit Status**: 0 on success.
 
----
+### `unalias`
+Removes alias definitions.
 
-### type
-Display command type information.
-
-**Usage:**
-```bash
-type name...
-```
-
-**Example:**
-```bash
-type ls      # ls is /bin/ls
-type cd      # cd is a shell builtin
-type myfunc  # myfunc is a function
-```
-
----
-
-### umask
-Set file creation mask.
-
-**Usage:**
-```bash
-umask [-S] [mask]
-```
-
-**Options:**
-- `-S`: Symbolic output
-
-**Example:**
-```bash
-umask
-umask 022
-umask u=rwx,g=rx,o=rx
-umask -S
-```
+- **Syntax**: `unalias name...` or `unalias -a`
+- **Exit Status**: 0 on success.

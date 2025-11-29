@@ -40,23 +40,30 @@ static Scope *current_scope = NULL;
 
 // Simple LRU cache
 #define VAR_CACHE_SIZE 4
+/*
 static struct {
     const char *name;
     char *last_name;
     char *value;
 } var_cache[VAR_CACHE_SIZE] = {{NULL, NULL, NULL}};
 static int var_cache_next = 0;
+*/
 
-static unsigned long hash_djb2(const char *str) {
+static unsigned long hash_djb2(const char *str, size_t *len_out) {
     unsigned long hash = 5381;
     int c;
-    while ((c = *str++))
+    size_t len = 0;
+    while ((c = *str++)) {
         hash = ((hash << 5) + hash) + c;
+        len++;
+    }
+    if (len_out) *len_out = len;
     return hash % HASH_SIZE;
 }
 
 static void init_special_var(struct var *v, const char *name, const char *val) {
     v->name = xstrdup(name);
+    v->name_len = strlen(name);
     v->value = xstrdup(val);
     v->flags = VSTRUCTFIXED | VEXPORT; // Special vars usually exported? No, not all.
     // IFS, OPTIND, PS1 etc are not necessarily exported by default in all shells, but usually are.
@@ -65,7 +72,7 @@ static void init_special_var(struct var *v, const char *name, const char *val) {
     v->func = NULL;
     v->next = NULL;
     
-    unsigned long h = hash_djb2(name);
+    unsigned long h = hash_djb2(name, NULL);
     v->next = vartab[h];
     vartab[h] = v;
 }
@@ -103,10 +110,11 @@ void posish_var_init(char **envp) {
 }
 
 static struct var *find_var(const char *name) {
-    unsigned long h = hash_djb2(name);
+    size_t len;
+    unsigned long h = hash_djb2(name, &len);
     struct var *v = vartab[h];
     while (v) {
-        if (strcmp(v->name, name) == 0) {
+        if (v->name_len == len && strcmp(v->name, name) == 0) {
             return v;
         }
         v = v->next;
@@ -115,36 +123,39 @@ static struct var *find_var(const char *name) {
 }
 
 int posish_var_set(const char *name, const char *value) {
-    struct var *v = find_var(name);
+    size_t len;
+    unsigned long h = hash_djb2(name, &len);
     
-    if (v) {
-        if (v->flags & VREADONLY) {
-            fprintf(stderr, "%s: readonly variable\n", name);
-            return 1;
-        }
-        if (v->value != value) { // Avoid self-assignment issues if pointers match
-             free(v->value);
-             v->value = xstrdup(value);
-        }
-        v->flags &= ~VUNSET;
-        
-        // Invalidate cache for this variable
-        for (int i = 0; i < VAR_CACHE_SIZE; i++) {
-            if (var_cache[i].last_name && strcmp(var_cache[i].last_name, name) == 0) {
-                free(var_cache[i].last_name);
-                var_cache[i].last_name = NULL;
-                var_cache[i].value = NULL;
-                break;
+    struct var *v = vartab[h];
+    while (v) {
+        if (v->name_len == len && strcmp(v->name, name) == 0) {
+            // Found existing variable
+            if (v->flags & VREADONLY) {
+                fprintf(stderr, "%s: readonly variable\n", name);
+                return 1;
             }
+            if (v->value != value) { // Avoid self-assignment issues if pointers match
+                 size_t new_len = strlen(value);
+                 size_t old_len = strlen(v->value);
+                 
+                 // OPTIMIZATION: Reuse buffer if new value fits
+                 if (new_len <= old_len) {
+                     strcpy(v->value, value);
+                 } else {
+                     free(v->value);
+                     v->value = xstrdup(value);
+                 }
+            }
+            v->flags &= ~VUNSET;
+            return 0;
         }
-        
-        return 0;
+        v = v->next;
     }
     
     // New variable
-    unsigned long h = hash_djb2(name);
     v = xmalloc(sizeof(struct var));
     v->name = xstrdup(name);
+    v->name_len = len;
     v->value = xstrdup(value);
     v->flags = 0;
     v->is_local = 0;
@@ -161,15 +172,18 @@ char *posish_var_get(const char *name) {
 
 const char *posish_var_get_value(const char *name) {
     // Check cache
+    /*
     for (int i = 0; i < VAR_CACHE_SIZE; i++) {
         if (var_cache[i].last_name && strcmp(var_cache[i].last_name, name) == 0) {
             return var_cache[i].value;
         }
     }
+    */
 
     struct var *v = find_var(name);
     if (v && !(v->flags & VUNSET)) {
         // Update cache
+        /*
         int idx = var_cache_next;
         var_cache_next = (var_cache_next + 1) % VAR_CACHE_SIZE;
         
@@ -200,14 +214,16 @@ const char *posish_var_get_value(const char *name) {
         var_cache[idx].name = name; // Just for debugging?
         var_cache[idx].last_name = xstrdup(name);
         var_cache[idx].value = xstrdup(v->value);
+        */
         
-        return var_cache[idx].value;
+        return v->value;
     }
     return NULL;
 }
 
 void posish_var_unset(const char *name) {
     // Invalidate cache
+    /*
     for (int i = 0; i < VAR_CACHE_SIZE; i++) {
         if (var_cache[i].last_name && strcmp(var_cache[i].last_name, name) == 0) {
             free(var_cache[i].last_name);
@@ -216,8 +232,9 @@ void posish_var_unset(const char *name) {
             var_cache[i].value = NULL;
         }
     }
+    */
 
-    unsigned long h = hash_djb2(name);
+    unsigned long h = hash_djb2(name, NULL);
     struct var **curr = &vartab[h];
     while (*curr) {
         if (strcmp((*curr)->name, name) == 0) {
@@ -319,8 +336,17 @@ char **posish_var_get_all(void) {
 }
 
 // Scope Management
+// Scope Management
+static Scope *scope_free_list = NULL;
+
 void posish_var_push_scope(void) {
-    Scope *new_scope = xmalloc(sizeof(Scope));
+    Scope *new_scope;
+    if (scope_free_list) {
+        new_scope = scope_free_list;
+        scope_free_list = new_scope->parent; // Reuse parent pointer as next pointer in free list
+    } else {
+        new_scope = xmalloc(sizeof(Scope));
+    }
     new_scope->locals = NULL;
     new_scope->parent = current_scope;
     current_scope = new_scope;
@@ -356,10 +382,15 @@ void posish_var_pop_scope(void) {
     }
     
     Scope *parent = current_scope->parent;
-    free(current_scope);
+    
+    // Return to free list
+    current_scope->parent = scope_free_list;
+    scope_free_list = current_scope;
+    
     current_scope = parent;
     
     // Invalidate cache
+    /*
     for (int i = 0; i < VAR_CACHE_SIZE; i++) {
         if (var_cache[i].last_name) {
             free(var_cache[i].last_name);
@@ -368,6 +399,7 @@ void posish_var_pop_scope(void) {
             var_cache[i].value = NULL;
         }
     }
+    */
 }
 
 void posish_var_declare_local(const char *name, const char *value) {

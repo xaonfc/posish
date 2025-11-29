@@ -37,12 +37,19 @@ int builtin_eval(char **argv) {
     }
     command[offset] = '\0';
     
+    struct stackmark smark;
+    mem_stack_push_mark(&smark);
+
+    // Fast-path for simple commands
+    if (parser_try_fast_path(command)) {
+        // Success
+        mem_stack_pop_mark(&smark);
+        return 0;
+    }
+
     // Parse the command
     Lexer lexer;
     lexer_init(&lexer, command);
-    
-    struct stackmark smark;
-    mem_stack_push_mark(&smark);
     
     ASTNode *ast = parser_parse(&lexer);
     

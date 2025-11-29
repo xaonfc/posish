@@ -8,5 +8,6 @@
 #include "ast.h"
 
 ASTNode *parser_parse(Lexer *lexer);
+int parser_try_fast_path(const char *cmd);
 
 #endif

@@ -18,6 +18,7 @@
 struct var {
     struct var *next;       /* next entry in hash list */
     char *name;             /* variable name */
+    size_t name_len; // Optimization: length of name for fast comparison
     char *value;            /* variable value */
     int flags;              /* flags defined above */
     int is_local;           /* 1 if declared with local */

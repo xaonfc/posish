@@ -13,6 +13,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <ctype.h>
 
 // Forward declarations
 typedef struct {
@@ -20,6 +21,76 @@ typedef struct {
     Token current_token;
     int has_token;
 } Parser;
+
+// Fast-path handler - returns 1 if handled, 0 if needs full parse
+int parser_try_fast_path(const char *cmd) {
+    // Skip whitespace
+    while (*cmd && (*cmd == ' ' || *cmd == '\t')) cmd++;
+    if (!*cmd) return 1; // Empty line handled
+    
+    // Check for blank line or comment
+    if (*cmd == '#' || *cmd == '\n') {
+        // If it's a comment, check if there's a newline.
+        // If there's a newline, we must parse the rest.
+        // If no newline, it's just a comment line, so we are done.
+        if (strchr(cmd, '\n')) return 0; // Let parser handle multi-line
+        return 1; // Just a comment
+    }
+    
+    // Fast-path: Simple assignment (VAR=value)
+    // But reject if there's a semicolon (compound command)
+    if (strchr(cmd, ';')) return 0; // Not simple, use full parser
+    
+    const char *eq = strchr(cmd, '=');
+    if (eq && eq > cmd) {
+        const char *p = cmd;
+        while (p < eq && (isalnum(*p) || *p == '_')) p++;
+        
+        if (p == eq) {
+            // Check if var name is valid (starts with alpha/underscore)
+            if (!isalpha(cmd[0]) && cmd[0] != '_') return 0;
+            
+            // Check value has no special shell characters that need expansion
+            int is_simple = 1;
+            for (const char *c = eq + 1; *c && is_simple; c++) {
+                if (*c == '$' || *c == '`' || *c == '\\' || *c == '"' || *c == '\'' || 
+                    *c == '*' || *c == '?' || *c == '[' || *c == '~' || *c == '\n') {
+                    is_simple = 0;
+                }
+            }
+            
+            if (is_simple) {
+                // Fast assignment path
+                size_t name_len = eq - cmd;
+                char *name = mem_stack_alloc(name_len + 1);
+                strncpy(name, cmd, name_len);
+                name[name_len] = '\0';
+                
+                // Find end of value (trim trailing whitespace/newline)
+                const char *val_start = eq + 1;
+                const char *val_end = val_start + strlen(val_start);
+                while (val_end > val_start && (val_end[-1] == ' ' || val_end[-1] == '\t' || val_end[-1] == '\n')) {
+                    val_end--;
+                }
+                
+                size_t val_len = val_end - val_start;
+                char *value = mem_stack_alloc(val_len + 1);
+                strncpy(value, val_start, val_len);
+                value[val_len] = '\0';
+                
+                posish_var_set(name, value);
+                // Success status handled normally (return 0 usually)
+                return 1;
+            }
+        }
+    }
+    
+    // Fast-path: Colon command
+    if (cmd[0] == ':' && (cmd[1] == '\0' || cmd[1] == ' ' || cmd[1] == '\t' || cmd[1] == '\n'))
+        return 1;
+    
+    return 0;
+}
 
 static ASTNode *parse_pipeline(Parser *parser);
 static ASTNode *parse_simple_command(Parser *parser);

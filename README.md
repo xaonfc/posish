@@ -37,7 +37,7 @@ The execution engine is optimized for low latency and high throughput.
 
 ### Build Instructions
 
-```bash
+```sh
 git clone https://github.com/xaonfc/posish.git
 cd posish
 make
@@ -58,7 +58,7 @@ Detailed technical documentation is available in the `docs/` directory:
 
 posish operates as a standard command interpreter:
 
-```bash
+```sh
 # Interactive mode
 ./posish
 
@@ -71,7 +71,7 @@ posish operates as a standard command interpreter:
 
 ### Trace Mode
 Enable execution tracing for debugging:
-```bash
+```sh
 ./posish -x script.sh
 ```
 

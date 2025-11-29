@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <stdio.h>
 
 // Forward declarations
 typedef struct {
@@ -51,8 +52,36 @@ ASTNode *parser_parse(Lexer *lexer) {
     // Parse a list (top level)
     ASTNode *node = parse_list(&parser);
     
-    // Clean up any remaining token in parser
+    // Check for unexpected tokens left over
     if (parser.has_token) {
+        Token token = parser.current_token;
+        if (token.type != TOKEN_EOF && token.type != TOKEN_NEWLINE) {
+            // If we have a node, we might have parsed "cmd; fi"
+            // If we don't have a node, we might have parsed "fi"
+            
+            // If it's a keyword that terminates a block, it's unexpected here
+            if (token.type == TOKEN_KEYWORD) {
+                if (strcmp(token.value, "then") == 0 || strcmp(token.value, "else") == 0 || 
+                    strcmp(token.value, "fi") == 0 || strcmp(token.value, "do") == 0 || 
+                    strcmp(token.value, "done") == 0 || strcmp(token.value, "esac") == 0 ||
+                    strcmp(token.value, "}") == 0) {
+                        
+                    fprintf(stderr, "posish: syntax error near unexpected token `%s'\n", token.value);
+                    if (node) ast_free(node);
+                    free_token(token);
+                    return NULL;
+                }
+            }
+            // Also check for unexpected operators like ';;' or ')'
+            if (token.type == TOKEN_OPERATOR) {
+                if (strcmp(token.value, ";;") == 0 || strcmp(token.value, ")") == 0) {
+                    fprintf(stderr, "posish: syntax error near unexpected token `%s'\n", token.value);
+                    if (node) ast_free(node);
+                    free_token(token);
+                    return NULL;
+                }
+            }
+        }
         free_token(parser.current_token);
     }
     

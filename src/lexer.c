@@ -462,8 +462,9 @@ char *lexer_read_until_delimiter(Lexer *lexer, const char *delimiter, int strip_
     
     return content;
 }
-// Check if input is incomplete (unclosed quotes, trailing backslash)
+// Check if input is incomplete (unclosed quotes, trailing backslash, open control structures)
 int lexer_check_incomplete(const char *input) {
+    // First check for unclosed quotes/backslashes using simple scan
     int in_single = 0;
     int in_double = 0;
     int escaped = 0;
@@ -471,45 +472,74 @@ int lexer_check_incomplete(const char *input) {
 
     for (size_t i = 0; i < len; i++) {
         char c = input[i];
-
         if (escaped) {
-            // If we escaped a newline, and it's the end of the string, it's a continuation!
-            // But wait, if we are here, we consumed the char after backslash.
-            // If that char was '\n', and it was the last char, then we are incomplete?
-            // No, read_line returns "line\n".
-            // So if input is "line\\\n", we see '\' then '\n'.
-            // At '\', escaped=1.
-            // At '\n', we enter this block. escaped=0.
-            // We need to detect that this was a backslash-newline sequence at the end.
-            
-            if (c == '\n' && i == len - 1) {
-                return 3; // Trailing backslash continuation
-            }
+            if (c == '\n' && i == len - 1) return 3; // Trailing backslash
             escaped = 0;
             continue;
         }
-
         if (c == '\\') {
-            // Backslash escapes next char if:
-            // 1. Outside quotes
-            // 2. Inside double quotes (only specific chars, but for completeness check we can be loose)
-            // Actually, inside single quotes backslash is literal.
-            if (!in_single) {
-                escaped = 1;
-            }
+            if (!in_single) escaped = 1;
         } else if (c == '\'') {
-            if (!in_double) {
-                in_single = !in_single;
-            }
+            if (!in_double) in_single = !in_single;
         } else if (c == '"') {
-            if (!in_single) {
-                in_double = !in_double;
-            }
+            if (!in_single) in_double = !in_double;
         }
     }
 
     if (in_single) return 1;
     if (in_double) return 2;
-    if (escaped) return 3; // Trailing backslash
+    if (escaped) return 3;
+
+    // Now check for open control structures using the lexer
+    // We need to tokenize the input to properly handle keywords vs words
+    Lexer lexer;
+    lexer_init(&lexer, input);
+    
+    int if_count = 0;
+    int while_count = 0; // Tracks while/until
+    int for_count = 0;
+    int case_count = 0;
+    int brace_count = 0;
+    int paren_count = 0;
+    
+    Token token;
+    while ((token = lexer_next_token(&lexer)).type != TOKEN_EOF) {
+        if (token.type == TOKEN_ERROR) {
+            // If we hit an error, it might be incomplete, but let the parser handle it
+            // unless it's specifically an incomplete error? 
+            // For now, assume complete so parser can error out.
+            return 0; 
+        }
+        
+        if (token.type == TOKEN_KEYWORD) {
+            if (strcmp(token.value, "if") == 0) if_count++;
+            else if (strcmp(token.value, "fi") == 0) if_count--;
+            else if (strcmp(token.value, "while") == 0 || strcmp(token.value, "until") == 0) while_count++;
+            else if (strcmp(token.value, "done") == 0) {
+                // done closes for, while, until
+                if (for_count > 0) for_count--;
+                else if (while_count > 0) while_count--;
+            }
+            else if (strcmp(token.value, "for") == 0) for_count++;
+            else if (strcmp(token.value, "case") == 0) case_count++;
+            else if (strcmp(token.value, "esac") == 0) case_count--;
+            else if (strcmp(token.value, "{") == 0) brace_count++;
+            else if (strcmp(token.value, "}") == 0) brace_count--;
+        } else if (token.type == TOKEN_OPERATOR) {
+            if (strcmp(token.value, "(") == 0) paren_count++;
+            else if (strcmp(token.value, ")") == 0) paren_count--;
+        }
+        
+        // Free token value safely
+        free_token(token);
+    }
+    
+    if (if_count > 0) return 4;
+    if (while_count > 0) return 5;
+    if (for_count > 0) return 6;
+    if (case_count > 0) return 7;
+    if (brace_count > 0) return 8;
+    if (paren_count > 0) return 9;
+    
     return 0;
 }

@@ -16,13 +16,13 @@ int builtin_shift(char **args) {
         }
     }
     
-    int count = var_get_positional_count();
+    int count = posish_var_get_positional_count();
     if (n > count) {
         error_msg("shift: shift count must be <= $#");
         return 1;
     }
     
-    if (var_shift_positional(n) != 0) {
+    if (posish_var_shift_positional(n) != 0) {
         error_msg("shift: shift count must be <= $#");
         return 1;
     }

@@ -13,11 +13,11 @@ int builtin_local(char **argv) {
         if (eq) {
             // Has assignment: local var=value
             *eq = '\0';
-            var_declare_local(argv[i], eq + 1);
+            posish_var_declare_local(argv[i], eq + 1);
             *eq = '='; // Restore for potential reuse
         } else {
             // Just declaration: local var
-            var_declare_local(argv[i], "");
+            posish_var_declare_local(argv[i], "");
         }
     }
     return 0;

@@ -8,7 +8,7 @@
 #include "alias.h"
 #include "variables.h"
 #include "memalloc.h"
-#include "mem_stack.h"
+#include "memalloc.h"
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -737,7 +737,7 @@ static ASTNode *parse_simple_command(Parser *parser) {
         if (eq && eq != token.value) {
             size_t name_len = eq - token.value;
             char *name_part = strndup(token.value, name_len); // Heap alloc, need free
-            int is_valid = var_is_valid_name(name_part);
+            int is_valid = posish_var_is_valid_name(name_part);
             free(name_part);
             
             if (is_valid) {

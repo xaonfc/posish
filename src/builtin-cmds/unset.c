@@ -12,7 +12,7 @@ int builtin_unset(char **args) {
     }
 
     for (int i = 1; args[i] != NULL; i++) {
-        var_unset(args[i]);
+        posish_var_unset(args[i]);
     }
     return 0;
 }

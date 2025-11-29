@@ -6,7 +6,7 @@
 #include <string.h>
 #include <stdio.h>
 #include "memalloc.h"
-#include "mem_stack.h"
+#include "memalloc.h"
 
 
 

@@ -8,7 +8,7 @@
 #include <sys/stat.h>
 #include "error.h"
 #include "memalloc.h"
-#include "mem_stack.h"
+#include "memalloc.h"
 #include "builtins.h"
 #include "lexer.h"
 #include "parser.h"
@@ -17,7 +17,7 @@
 
 // Find file in PATH
 static char *find_in_path(const char *filename) {
-    char *path = var_get("PATH");
+    const char *path = pathval();
     if (!path) return NULL;
     
     char *path_copy = xstrdup(path);

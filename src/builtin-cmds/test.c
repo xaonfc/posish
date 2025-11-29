@@ -1,4 +1,20 @@
+/*-
+ * test(1); version 7-like  --  author Erik Baalbergen
+ * modified by Eric Gisin to be used as built-in.
+ * modified by Arnold Robbins to add SVR3 compatibility
+ * (-x -c -b -p -u -g -k) plus Korn's -L -nt -ot -ef and new -S (socket).
+ * modified by J.T. Conklin for NetBSD.
+ *
+ * This program is in the Public Domain.
+ */
+/*
+ * Important: This file is used both as a standalone program /bin/test and
+ * as a builtin for /bin/sh (#define SHELL).
+ */
 
+ /*
+  * Modified by xaonfc (Mario) for Posish. Patches are under GPL-2.0-or-later.
+  */
 
 #include <sys/cdefs.h>
 #include <sys/types.h>

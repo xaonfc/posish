@@ -122,7 +122,7 @@ int builtin_read(char **argv) {
     } while (continuation);
 
     // Get IFS
-    char *ifs_val = var_get("IFS");
+    char *ifs_val = posish_var_get("IFS");
     char *ifs = ifs_val;
     
     // Split line into fields
@@ -148,7 +148,7 @@ int builtin_read(char **argv) {
             // Null terminate
             char saved = *value_end;
             *value_end = '\0';
-            var_set(var_name, value_start);
+            posish_var_set(var_name, value_start);
             *value_end = saved; // Restore just in case
             break;
         }
@@ -179,7 +179,7 @@ int builtin_read(char **argv) {
         // Null terminate and set
         char saved = *value_end;
         *value_end = '\0';
-        var_set(var_name, value_start);
+        posish_var_set(var_name, value_start);
         *value_end = saved;
     }
 

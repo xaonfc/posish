@@ -6,7 +6,7 @@
 #include <string.h>
 #include "builtins.h"
 #include "memalloc.h"
-#include "mem_stack.h"
+#include "memalloc.h"
 #include "lexer.h"
 #include "parser.h"
 #include "executor.h"

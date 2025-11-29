@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include "error.h"
 #include <ctype.h>
+#include "buf_output.h" // Added
 
 int builtin_exit(char **args) {
     int status = 0;
@@ -28,7 +29,7 @@ int builtin_exit(char **args) {
         }
     }
     signal_trigger_exit();
-    fflush(NULL);
+    buf_out_flush_all();
     exit(status);
     return 0; // Unreachable
 }

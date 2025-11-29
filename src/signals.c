@@ -231,6 +231,9 @@ void signal_check_pending(void) {
 }
 
 void signal_trigger_exit(void) {
+    // Check for other pending signals first (e.g. TERM) which might call exit()
+    signal_check_pending();
+    
     pending_signals[0] = 1;
     any_pending_signal = 1;
     signal_check_pending();

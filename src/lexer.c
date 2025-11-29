@@ -9,7 +9,7 @@
 #include <stdio.h>
 #include "memalloc.h"
 #include "alias.h"
-#include "mem_stack.h"
+#include "memalloc.h"
 
 // Simple operators for now. POSIX defines more (&&, ||, ;;, <<, >>, <&, >&, <>, <<-, >|)
 static const char *OPERATORS[] = {

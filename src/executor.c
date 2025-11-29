@@ -1328,6 +1328,24 @@ static int execute_simple_command(ASTNode *node) {
         return status;
     }
 
+
+    // Fast-path for trivial builtins to avoid dispatcher overhead
+    // Design inspired by FreeBSD sh architecture (BSD-3-Clause)
+    const char *cmd = argv[0];
+    if (cmd[0] == ':' && cmd[1] == '\0') {
+        // ":" builtin - always succeeds
+        // No free needed for argv
+        return 0;
+    }
+    if (cmd[0] == 't' && strcmp(cmd, "true") == 0) {
+        // No free needed for argv
+        return 0;
+    }
+    if (cmd[0] == 'f' && strcmp(cmd, "false") == 0) {
+        // No free needed for argv
+        return 1;
+    }
+
     if (builtin_is_builtin(argv[0])) {
         int is_exec_no_args = (strcmp(argv[0], "exec") == 0 && argc == 1);
         int has_redirections = (node->data.command.redirection_count > 0);

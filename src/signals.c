@@ -78,10 +78,21 @@ void signal_init(void) {
     }
 
     // Check which signals are ignored on entry
-    for (int i = 1; i < MAX_SIGNALS; i++) {
-        sigaction(i, NULL, &sa);
-        if (sa.sa_handler == SIG_IGN) {
-            signals_ignored_on_entry[i] = 1;
+    // Optimization: Only check signals we actually care about, not all 64!
+    // FreeBSD sh approach - only check the signals we might trap
+    // This eliminates ~55 unnecessary syscalls on startup
+    static const int signals_to_check[] = {
+        SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGCHLD, SIGTSTP, SIGTTIN, SIGTTOU,
+        SIGPIPE, SIGALRM, SIGUSR1, SIGUSR2, 0
+    };
+    
+    for (int i = 0; signals_to_check[i] != 0; i++) {
+        int signum = signals_to_check[i];
+        if (signum > 0 && signum < MAX_SIGNALS) {
+            sigaction(signum, NULL, &sa);
+            if (sa.sa_handler == SIG_IGN) {
+                signals_ignored_on_entry[signum] = 1;
+            }
         }
     }
 }

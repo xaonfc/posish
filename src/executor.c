@@ -286,6 +286,8 @@ static char *execute_subshell_capture(const char *cmd_str) {
         close(pipefd[1]);
         
         int status = executor_execute(node);
+        // CRITICAL: Flush buffered output before _exit() so it goes to pipe
+        buf_out_flush_all();
         // ast_free(node); // No-op
         _exit(status);  // CRITICAL: use _exit() not exit() with vfork()
     } else if (pid < 0) {

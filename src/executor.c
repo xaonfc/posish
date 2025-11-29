@@ -1040,12 +1040,16 @@ static char **expand_word_internal(const char *word, int allow_split) {
                         if (args) {
                             size_t total_len = 0;
                             for (int k = 0; args[k]; k++) total_len += strlen(args[k]) + 1;
-                            char *tmp_val = mem_stack_alloc(total_len + 1); tmp_val[0] = '\0';
+                            char *tmp_val = mem_stack_alloc(total_len + 1);
+                            char *p = tmp_val;
                             for (int k = 0; args[k]; k++) {
-                                strcat(tmp_val, args[k]);
-                                if (args[k+1]) strcat(tmp_val, " ");
+                                size_t arg_len = strlen(args[k]);
+                                memcpy(p, args[k], arg_len);
+                                p += arg_len;
+                                if (args[k+1]) *p++ = ' ';
                                 free(args[k]);
                             }
+                            *p = '\0';
                             free(args);
                             val = tmp_val; // This is stack allocated, so it's fine.
                         } else { val = ""; }

@@ -79,5 +79,6 @@ char *posish_var_get_shell_name(void);
 void posish_var_push_scope(void);
 void posish_var_pop_scope(void);
 void posish_var_declare_local(const char *name, const char *value);
+void posish_var_set_lineno(int lineno);
 
 #endif

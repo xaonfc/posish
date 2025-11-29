@@ -1719,7 +1719,7 @@ static int execute_while(ASTNode *node) {
         struct stackmark smark;
         mem_stack_push_mark(&smark);
 
-        signal_check_pending();
+        // signal_check_pending(); // Redundant: called in executor_execute
         int old_ignore = shell_ignore_errexit;
         shell_ignore_errexit = 1;
         int cond_status = executor_execute(node->data.while_loop.condition);
@@ -1967,9 +1967,7 @@ int executor_execute(ASTNode *node) {
 
     // Update LINENO
     if (node->lineno > 0) {
-        char buf[32];
-        snprintf(buf, sizeof(buf), "%d", node->lineno);
-        posish_var_set("LINENO", buf);
+        posish_var_set_lineno(node->lineno);
     }
 
     int status = 0;

@@ -599,3 +599,54 @@ char **posish_var_get_all_readonly(void) {
     result[idx] = NULL;
     return result;
 }
+
+static void int_to_str(int n, char *buf) {
+    char temp[32];
+    int i = 0;
+    if (n == 0) {
+        buf[0] = '0';
+        buf[1] = '\0';
+        return;
+    }
+    while (n > 0) {
+        temp[i++] = (n % 10) + '0';
+        n /= 10;
+    }
+    int j = 0;
+    while (i > 0) {
+        buf[j++] = temp[--i];
+    }
+    buf[j] = '\0';
+}
+
+void posish_var_set_lineno(int lineno) {
+    static struct var *lineno_var = NULL;
+    static int last_lineno = -1;
+    
+    if (lineno == last_lineno && lineno_var) return;
+    
+    char buf[32];
+    int_to_str(lineno, buf);
+    
+    if (lineno_var) {
+        // Fast path: update directly
+        if (lineno_var->flags & VREADONLY) return;
+        
+        size_t new_len = strlen(buf);
+        size_t old_len = strlen(lineno_var->value);
+        
+        if (new_len <= old_len) {
+            strcpy(lineno_var->value, buf);
+        } else {
+            free(lineno_var->value);
+            lineno_var->value = xstrdup(buf);
+        }
+        last_lineno = lineno;
+        return;
+    }
+    
+    // Slow path: lookup and cache
+    posish_var_set("LINENO", buf);
+    lineno_var = find_var("LINENO");
+    last_lineno = lineno;
+}

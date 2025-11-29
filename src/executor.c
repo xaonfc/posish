@@ -1195,6 +1195,34 @@ char *expand_word(const char *word) {
 }
 
 char **expand_word_split(const char *word) {
+    // Optimization for "$VAR"
+    if (word[0] == '"' && word[1] == '$') {
+        size_t len = strlen(word);
+        if (len > 3 && word[len-1] == '"') {
+            // Check if valid var name in between
+            int is_simple = 1;
+            for (size_t i = 2; i < len - 1; i++) {
+                if (!isalnum(word[i]) && word[i] != '_') {
+                    is_simple = 0;
+                    break;
+                }
+            }
+            if (is_simple) {
+                // Extract var name
+                char var_name[256];
+                if (len - 3 < sizeof(var_name)) {
+                    memcpy(var_name, word + 2, len - 3);
+                    var_name[len - 3] = '\0';
+                    
+                    const char *val = posish_var_get_value(var_name);
+                    char **res = mem_stack_alloc(2 * sizeof(char*));
+                    res[0] = val ? mem_stack_strdup(val) : mem_stack_strdup("");
+                    res[1] = NULL;
+                    return res;
+                }
+            }
+        }
+    }
     return expand_word_internal(word, 1);
 }
 
@@ -1300,7 +1328,8 @@ static int execute_simple_command(ASTNode *node) {
         return 0;
     }
 
-    char **argv = NULL;
+    size_t argv_cap = node->data.command.arg_count + 4; // Pre-allocate with slight buffer
+    char **argv = mem_stack_alloc(argv_cap * sizeof(char*));
     size_t argc = 0;
     
     for (size_t i = 0; i < node->data.command.arg_count; i++) {
@@ -1316,19 +1345,31 @@ static int execute_simple_command(ASTNode *node) {
                 int flags = GLOB_NOCHECK; 
                 
                 if (glob(pattern, flags, NULL, &glob_result) == 0) {
-                    argv = mem_stack_realloc_array(argv, argc * sizeof(char*), (argc + glob_result.gl_pathc + 1) * sizeof(char *), 1);
+                    if (argc + glob_result.gl_pathc + 1 >= argv_cap) {
+                        size_t new_cap = argv_cap * 2 + glob_result.gl_pathc;
+                        argv = mem_stack_realloc_array(argv, argv_cap * sizeof(char*), new_cap * sizeof(char*), 1);
+                        argv_cap = new_cap;
+                    }
                     for (size_t j = 0; j < glob_result.gl_pathc; j++) {
                         argv[argc++] = mem_stack_strdup(glob_result.gl_pathv[j]);
                     }
                     globfree(&glob_result);
                 } else {
-                    argv = mem_stack_realloc_array(argv, argc * sizeof(char*), (argc + 2) * sizeof(char *), 1);
+                    if (argc + 2 >= argv_cap) {
+                        size_t new_cap = argv_cap * 2;
+                        argv = mem_stack_realloc_array(argv, argv_cap * sizeof(char*), new_cap * sizeof(char*), 1);
+                        argv_cap = new_cap;
+                    }
                     argv[argc++] = expanded;
                     expanded = NULL;
                 }
                 // No free needed for pattern
             } else {
-                argv = mem_stack_realloc_array(argv, argc * sizeof(char*), (argc + 2) * sizeof(char *), 1);
+                if (argc + 2 >= argv_cap) {
+                    size_t new_cap = argv_cap * 2;
+                    argv = mem_stack_realloc_array(argv, argv_cap * sizeof(char*), new_cap * sizeof(char*), 1);
+                    argv_cap = new_cap;
+                }
                 argv[argc++] = expanded;
                 expanded = NULL;
             }
@@ -1436,6 +1477,44 @@ static int execute_simple_command(ASTNode *node) {
     if (cmd[0] == 'f' && strcmp(cmd, "false") == 0) {
         // No free needed for argv
         return 1;
+    }
+
+    // Fast-path for [ and test builtins
+    if ((cmd[0] == '[' && cmd[1] == '\0') || (strcmp(cmd, "test") == 0)) {
+        int is_bracket = (cmd[0] == '[');
+        int effective_argc = argc;
+        
+        if (is_bracket) {
+            if (strcmp(argv[argc-1], "]") != 0) {
+                // Missing closing bracket, fall back to slow path for error reporting
+                goto slow_test;
+            }
+            effective_argc--; // Ignore trailing ]
+        }
+        
+        // [ a = b ] or test a = b
+        if (effective_argc == 4 && argv[2][1] == '\0') {
+            if (argv[2][0] == '=') {
+                return (strcmp(argv[1], argv[3]) != 0);
+            }
+        }
+        
+        // [ a != b ] or test a != b
+        if (effective_argc == 4 && argv[2][0] == '!' && argv[2][1] == '=' && argv[2][2] == '\0') {
+            return (strcmp(argv[1], argv[3]) == 0);
+        }
+        
+        // [ -z a ] or test -z a
+        if (effective_argc == 3 && argv[1][0] == '-' && argv[1][1] == 'z' && argv[1][2] == '\0') {
+            return (argv[2][0] != '\0');
+        }
+        
+        // [ -n a ] or test -n a
+        if (effective_argc == 3 && argv[1][0] == '-' && argv[1][1] == 'n' && argv[1][2] == '\0') {
+            return (argv[2][0] == '\0');
+        }
+        
+        slow_test:;
     }
 
     if (builtin_is_builtin(argv[0])) {

@@ -435,6 +435,14 @@ static long eval_term(const char **str) {
                 exit(1);
             }
             val /= divisor;
+        } else if (**str == '%') {
+            (*str)++;
+            long divisor = eval_factor(str);
+            if (divisor == 0) {
+                error_msg("division by 0");
+                exit(1);
+            }
+            val %= divisor;
         } else {
             break;
         }

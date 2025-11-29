@@ -107,21 +107,21 @@ static void enable_raw_mode(void) {
     raw.c_cc[VMIN] = 1;
     raw.c_cc[VTIME] = 0;
     
-    tcsetattr(input_get_fd(), TCSAFLUSH, &raw);
+    tcsetattr(input_get_fd(), TCSADRAIN, &raw);
     raw_mode_enabled = 1;
 }
 
 // Disable raw mode
 static void disable_raw_mode(void) {
     if (!raw_mode_enabled) return;
-    tcsetattr(input_get_fd(), TCSAFLUSH, &orig_termios);
+    tcsetattr(input_get_fd(), TCSADRAIN, &orig_termios);
     
     // Also restore stdout and stderr if they're TTYs
     if (output_is_tty()) {
-        tcsetattr(output_get_fd(), TCSAFLUSH, &orig_termios);
+        tcsetattr(output_get_fd(), TCSADRAIN, &orig_termios);
     }
     if (error_is_tty()) {
-        tcsetattr(error_get_fd(), TCSAFLUSH, &orig_termios);
+        tcsetattr(error_get_fd(), TCSADRAIN, &orig_termios);
     }
     
     raw_mode_enabled = 0;

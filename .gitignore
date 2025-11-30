@@ -32,6 +32,14 @@ test_output/
 *.orig
 
 
+
 # testing
 tests/__pycache__
+
+# Debian packaging
+*.deb
+*.changes
+*.buildinfo
+*.dsc
+*.tar.xz
 

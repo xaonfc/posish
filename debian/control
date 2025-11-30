@@ -1,0 +1,17 @@
+Source: posish
+Section: shells
+Priority: optional
+Maintainer: xaonfc (Mario) <237485123+xaonfc@users.noreply.github.com>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.6.2
+Homepage: https://github.com/xaonfc/posish
+Rules-Requires-Root: no
+
+Package: posish
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: POSIX-compliant shell optimized for performance
+ posish is a clean-room implementation of a POSIX shell, designed to be
+ significantly faster than standard shells like dash or bash for scripting
+ tasks. It features a custom buffered output system, optimized variable
+ handling, and fast-path execution for builtins.

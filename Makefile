@@ -1,6 +1,7 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -pedantic -std=c99 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -Iinclude -Werror -O3 -march=native -flto
 LDFLAGS = -flto
+DEBFLAGS ?= -us -uc
 
 SRC_DIR = src
 OBJ_DIR = obj
@@ -65,4 +66,10 @@ $(OBJ_DIR)/builtin-cmds:
 clean:
 	rm -rf $(OBJ_DIR) $(BIN)
 
-.PHONY: all clean
+.PHONY: all clean deb
+
+deb:
+	dpkg-buildpackage $(DEBFLAGS) -b
+	mv ../posish_*.deb .
+	mv ../posish_*.changes .
+	mv ../posish_*.buildinfo .

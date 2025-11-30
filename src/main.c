@@ -391,7 +391,7 @@ done_parsing_options:
     }
     
     // Debug sanity check
-    posish_var_get("PATH");
+    // posish_var_get("PATH"); // Removed to avoid leak
     
     // For interactive shells (login or not), we might need ENV?
     // POSIX says: "If the shell is interactive, it shall expand the value of the ENV variable... and source it."
@@ -481,13 +481,15 @@ done_parsing_options:
         char *prompt_str = NULL;
         if (is_interactive) {
             if (command_buffer) {
-                const char *ps2 = posish_var_get("PS2");
-                if (!ps2) ps2 = "> ";
+                char *ps2_val = posish_var_get("PS2");
+                const char *ps2 = ps2_val ? ps2_val : "> ";
                 prompt_str = strdup(ps2);
+                if (ps2_val) free(ps2_val);
             } else {
-                const char *ps1 = posish_var_get("PS1");
-                if (!ps1) ps1 = geteuid() == 0 ? "# " : "$ "; // Default: # for root, $ for user
+                char *ps1_val = posish_var_get("PS1");
+                const char *ps1 = ps1_val ? ps1_val : (geteuid() == 0 ? "# " : "$ ");
                 prompt_str = expand_prompt(ps1);
+                if (ps1_val) free(ps1_val);
             }
         }
         
@@ -500,16 +502,8 @@ done_parsing_options:
                 fprintf(stderr, "\n%s: syntax error: unexpected end of file\n", argv[0]);
                 free(command_buffer);
                 command_buffer = NULL;
-                // Reset state? For now just continue to next prompt (which will exit loop if EOF persists)
-                // Actually read_line returning NULL usually means Ctrl-D.
-                // If we are in continuation, we should abort this command but stay in shell?
-                // But read_line returns NULL on EOF. If we loop, we might get NULL again immediately.
-                // Let's just break for now, or handle it like bash (exit shell).
-                // Bash exits shell on EOF even in continuation if it's the only thing.
-                // But if I type "echo 'hi<Ctrl-D>", bash prints error and stays.
-                // Our read_line might behave differently.
-                // Let's assume NULL means stream closed.
-                break; 
+            } else if (is_interactive) {
+                printf("exit\n");
             }
             break; // EOF
         }

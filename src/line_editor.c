@@ -363,6 +363,12 @@ char *read_line(const char *prompt) {
         } else if (c >= 32 && c < 127) { // Printable character
             // Expand buffer if needed
             if (len + 2 >= capacity) {
+                if (capacity >= 1024 * 1024) { // 1MB limit
+                    disable_raw_mode();
+                    free(buf);
+                    fprintf(stderr, "\r\nLine too long\n");
+                    return NULL;
+                }
                 capacity *= 2;
                 char *new_buf = xrealloc(buf, capacity);
                 if (!new_buf) {

@@ -22,6 +22,7 @@
 #include <glob.h>
 #include <pwd.h>
 #include "functions.h"
+#include "signals.h"
 
 extern char **environ;
 
@@ -1636,6 +1637,11 @@ static int execute_simple_command(ASTNode *node) {
     
     int status = job_wait(j);
     
+    // If child was interrupted by SIGINT, propagate it
+    if (status == 128 + SIGINT) {
+        got_sigint = 1;
+    }
+    
     // No free needed for executable, argv
 
     return status;
@@ -1771,7 +1777,13 @@ static int execute_for(ASTNode *node) {
         struct stackmark smark;
         mem_stack_push_mark(&smark);
         
-        signal_check_pending();
+        // Check for Ctrl+C interruption
+        if (signal_check_sigint()) {
+            fprintf(stderr, "\n");
+            mem_stack_pop_mark(&smark);
+            return 130;  // 128 + SIGINT
+        }
+        
         if (posish_var_set(node->data.for_loop.var_name, items[i]) != 0) {
             // Assignment failed (readonly variable)
             status = 1;
@@ -1833,6 +1845,12 @@ static int execute_while(ASTNode *node) {
         struct stackmark smark;
         mem_stack_push_mark(&smark);
 
+        // Check for Ctrl+C interruption
+        if (signal_check_sigint()) {
+            fprintf(stderr, "\n");
+            mem_stack_pop_mark(&smark);
+            return 130;  // 128 + SIGINT
+        }
 
         int old_ignore = shell_ignore_errexit;
         shell_ignore_errexit = 1;
@@ -1878,6 +1896,12 @@ static int execute_until(ASTNode *node) {
         struct stackmark smark;
         mem_stack_push_mark(&smark);
 
+        // Check for Ctrl+C interruption
+        if (signal_check_sigint()) {
+            fprintf(stderr, "\n");
+            mem_stack_pop_mark(&smark);
+            return 130;  // 128 + SIGINT
+        }
 
         int old_ignore = shell_ignore_errexit;
         shell_ignore_errexit = 1;

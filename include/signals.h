@@ -5,9 +5,17 @@
 #define SIGNALS_H
 
 #include <signal.h>
+#include <setjmp.h> // Added for sigjmp_buf
 
 // Initialize signal handling
 void signal_init(void);
+
+// Get signal number from name (case insensitive, with or without SIG prefix)
+// Returns -1 if not found
+int signal_get_number(const char *name);
+
+// Get signal name from number
+const char *signal_get_name(int signum);
 
 // Register a trap command for a signal
 // Returns 0 on success, -1 on error (e.g. invalid signal)
@@ -35,5 +43,9 @@ int signal_get_number(const char *name);
 
 // Get signal name from number
 const char *signal_get_name(int signum);
+
+// For interactive mode SIGINT handling
+extern volatile sig_atomic_t got_sigint;
+int signal_check_sigint(void);
 
 #endif // SIGNALS_H

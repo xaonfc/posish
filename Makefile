@@ -1,5 +1,5 @@
-CC = gcc
-CFLAGS = -Wall -Wextra -pedantic -std=c99 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -Iinclude -Werror -O3 -march=native -flto
+CC ?= cc
+CFLAGS = -Wall -Wextra -g -D_XOPEN_SOURCE=700 -D_DEFAULT_SOURCE -Iinclude -Werror -O3 -march=native -flto
 LDFLAGS = -flto
 DEBFLAGS ?= -us -uc
 VERSION ?= 0.0.1

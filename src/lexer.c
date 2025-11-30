@@ -12,6 +12,8 @@
 #include "memalloc.h"
 
 // Simple operators for now. POSIX defines more (&&, ||, ;;, <<, >>, <&, >&, <>, <<-, >|)
+static const char *NEWLINE_TOKEN = "\n";
+
 static const char *OPERATORS[] = {
     "&&", "||", ";;", "<<", ">>", "<&", ">&", "<>", ">|", // 2-char ops first
     "|", "&", ";", "<", ">", "(", ")", "\n", NULL
@@ -30,7 +32,7 @@ void free_token(Token token) {
     if (token.value) {
         int is_static = 0;
         for (int i = 0; OPERATORS[i]; i++) {
-            if (token.value == OPERATORS[i] || token.value == (char*)"\n") {
+            if (token.value == OPERATORS[i] || token.value == (char*)NEWLINE_TOKEN) {
                 is_static = 1;
                 break;
             }

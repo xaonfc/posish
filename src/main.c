@@ -26,6 +26,10 @@
 
 #define MAX_LINE 1024
 
+#ifndef HOST_NAME_MAX
+#define HOST_NAME_MAX 255
+#endif
+
 extern char **environ;
 
 void sigchld_handler(int sig) {
@@ -129,7 +133,7 @@ char *expand_prompt(const char *ps1) {
     return buffer;
 }
 
-void print_prompt() {
+void print_prompt(void) {
     if (isatty(STDIN_FILENO)) {
         printf(geteuid() == 0 ? "# " : "$ ");
         fflush(stdout);

@@ -60,7 +60,9 @@ static const SignalMap signal_map[] = {
     {"XFSZ", SIGXFSZ},
     {"VTALRM", SIGVTALRM},
     {"PROF", SIGPROF},
+#ifdef SIGWINCH
     {"WINCH", SIGWINCH},
+#endif
     {NULL, 0}
 };
 

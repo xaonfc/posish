@@ -24,6 +24,16 @@
 #include "functions.h"
 #include "signals.h"
 
+/* 
+ * vfork() was removed from POSIX.1-2008, so _POSIX_C_SOURCE=200809L hides it.
+ * We explicitly declare it here because we want the performance benefits
+ * of vfork() on systems that support it (Linux, BSDs), even when compiling
+ * in strict POSIX mode.
+ */
+#if defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 200809L
+extern pid_t vfork(void);
+#endif
+
 extern char **environ;
 
 static int last_exit_status = 0;
@@ -1597,10 +1607,20 @@ static int execute_simple_command(ASTNode *node) {
         return 127;
     }
 
+    // Block SIGCHLD to prevent race condition where signal handler reaps process
+    // before job_wait() can.
+    sigset_t mask, oldmask;
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGCHLD);
+    sigprocmask(SIG_BLOCK, &mask, &oldmask);
+
     // OPTIMIZATION: Use vfork() instead of fork() for external commands
     buf_out_flush_all();
     pid_t pid = vfork();
     if (pid == 0) {
+        // Child process - restore signal mask
+        sigprocmask(SIG_SETMASK, &oldmask, NULL);
+        
         signal(SIGINT, SIG_DFL);
         signal(SIGQUIT, SIG_DFL);
         signal(SIGTSTP, SIG_DFL);
@@ -1626,6 +1646,7 @@ static int execute_simple_command(ASTNode *node) {
             _exit(126);
         }
     } else if (pid < 0) {
+        sigprocmask(SIG_SETMASK, &oldmask, NULL); // Restore mask on error
         error_sys("vfork");
         // No free needed for executable, argv
         return 1;
@@ -1636,6 +1657,9 @@ static int execute_simple_command(ASTNode *node) {
     posish_var_set_last_bg_pid(pid);
     
     int status = job_wait(j);
+    
+    // Restore signal mask
+    sigprocmask(SIG_SETMASK, &oldmask, NULL);
     
     // If child was interrupted by SIGINT, propagate it
     if (status == 128 + SIGINT) {

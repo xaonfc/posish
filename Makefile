@@ -2,6 +2,7 @@ CC = gcc
 CFLAGS = -Wall -Wextra -pedantic -std=c99 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -Iinclude -Werror -O3 -march=native -flto
 LDFLAGS = -flto
 DEBFLAGS ?= -us -uc
+VERSION ?= 0.0.1
 
 SRC_DIR = src
 OBJ_DIR = obj
@@ -69,6 +70,7 @@ clean:
 .PHONY: all clean deb
 
 deb:
+	dch -v $(VERSION)-1 --distribution unstable "Build version $(VERSION)"
 	dpkg-buildpackage $(DEBFLAGS) -b
 	mv ../posish_*.deb .
 	mv ../posish_*.changes .

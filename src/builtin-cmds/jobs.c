@@ -3,10 +3,9 @@
 
 #include "builtins.h"
 #include "jobs.h"
-#include <stdio.h>
 
 int builtin_jobs(char **args) {
-    (void)args; // Unused for now
+    (void)args;
     job_print_all();
     return 0;
 }

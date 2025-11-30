@@ -70,6 +70,7 @@ clean:
 .PHONY: all clean distclean deb tests help
 
 deb:
+	rm -f debian/changelog.dch
 	dch -v $(VERSION)-1 --distribution unstable "Build version $(VERSION)"
 	dpkg-buildpackage $(DEBFLAGS) -b
 	mv ../posish_*.deb .
@@ -81,7 +82,7 @@ tests: $(BIN)
 
 distclean: clean
 	rm -f posish_*.deb posish_*.changes posish_*.buildinfo posish_*.dsc posish_*.tar.xz
-	rm -rf debian/.debhelper debian/posish debian/files debian/*.substvars debian/debhelper-build-stamp
+	rm -rf debian/.debhelper debian/posish debian/files debian/*.substvars debian/debhelper-build-stamp debian/changelog.dch
 
 help:
 	@echo "Available targets:"

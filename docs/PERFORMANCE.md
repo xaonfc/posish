@@ -34,20 +34,59 @@ Comparative benchmarks against FreeBSD `sh` (a standard high-performance referen
 
 ### Throughput (Operations/Second)
 
-| Benchmark | posish | FreeBSD sh | ksh | vs FreeBSD |
-|-----------|--------|------------|-----|------------|
-| **Builtins** | | | | |
-| `echo` | **1.91M** | 1.09M | 0.92M | **175%** |
-| `printf` | **1.76M** | 1.05M | 0.64M | **167%** |
-| `:` (null) | 2.30M | 3.03M | 1.01M | 76% |
-| **Scripting** | | | | |
-| Assignment | 2.43M | 3.08M | 1.15M | 79% |
-| Subshell | 33.6K | 5.0K | 174K | **672%** |
-| Command Subst | 2.11M | 2.15M | 0.15M | 98% |
+```shellbench
+------------------------------------------------------------------------
+name                                                 ./posish ../chimerautils/build/src.freebsd/sh/sh
+------------------------------------------------------------------------
+assign.sh: positional params                        2,847,481  2,428,795 
+assign.sh: variable                                 4,810,744  3,135,744 
+assign.sh: local var                                4,788,130  2,969,720 
+assign.sh: local var (typeset)                          error      error 
+cmp.sh: [ ]                                         2,439,005  2,039,336 
+cmp.sh: [[ ]]                                           error      error 
+cmp.sh: case                                        4,036,605  3,445,652 
+count.sh: posix                                     2,812,973  2,210,084 
+count.sh: typeset -i                                    error      error 
+count.sh: increment                                     error      error 
+eval.sh: direct assign                              2,531,910  1,952,824 
+eval.sh: eval assign                                1,814,188  1,180,040 
+eval.sh: command subs                                 101,099      4,754 
+func.sh: no func                                    4,136,139  3,067,453 
+func.sh: func                                       3,344,158  2,452,250 
+null.sh: blank                                      5,159,506  4,100,749 
+null.sh: assign variable                            4,530,407  3,062,480 
+null.sh: define function                            4,015,472  3,300,167 
+null.sh: undefined variable                         3,629,666  3,182,997 
+null.sh: : command                                  4,026,668  3,129,328 
+output.sh: echo                                     3,192,167  1,108,488 
+output.sh: printf                                   2,833,618  1,040,621 
+output.sh: print                                        error      error 
+stringop1.sh: string length                         3,368,859  2,871,383 
+stringop2.sh: substr 1 builtin                          error      error 
+stringop2.sh: substr 1 echo | cut                       1,157        985 
+stringop2.sh: substr 1 cut here doc                     1,564      1,368 
+stringop2.sh: substr 1 cut here str                     1,786      error 
+stringop3.sh: str remove ^ shortest builtin         2,438,157  2,371,197 
+stringop3.sh: str remove ^ shortest echo | cut          1,131        951 
+stringop3.sh: str remove ^ shortest cut here doc        1,566      1,354 
+stringop3.sh: str remove ^ shortest cut here str        1,762      error 
+stringop4.sh: str subst one builtin                     error      error 
+stringop4.sh: str subst one echo | sed                    851        704 
+stringop4.sh: str subst one sed here doc                1,097        999 
+stringop4.sh: str subst one sed here str                1,211      error 
+subshell.sh: no subshell                            3,889,799  2,890,803 
+subshell.sh: brace                                  3,866,504  2,948,948 
+subshell.sh: subshell                                  34,934      5,004 
+subshell.sh: command subs                           3,651,738  2,180,950 
+subshell.sh: external command                           2,366      2,469 
+------------------------------------------------------------------------
+* count: number of executions per second
+```
 
-*Data collected on Linux x86_64, Intel Core i7.*
+*Data collected on Linux x86_64, Ryzen 5 5600G, 16GB RAM, 512GB SSD*
 
 ### Analysis
-- **Output Operations**: posish significantly outperforms FreeBSD sh due to optimized buffering.
-- **Subshells**: `vfork` optimization provides a massive advantage over standard fork-based shells.
-- **Core Loop**: Slightly slower than FreeBSD sh (70-80%) due to AST-based execution vs FreeBSD's more optimized internal representation, but significantly faster than ksh.
+- **Output Operations**: posish dominates due to optimized buffering and fast-path builtins (~3x faster).
+- **Subshells**: `vfork` optimization provides a massive 7x advantage over standard fork-based shells.
+- **Core Loop**: Optimized AST execution and fast-paths (parser bypass) make posish significantly faster than FreeBSD sh in all core metrics.
+- **Command Substitution**: Efficient memory management and buffer reuse lead to 67% higher throughput.

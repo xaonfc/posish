@@ -3,6 +3,8 @@ CFLAGS = -Wall -Wextra -pedantic -std=c99 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_S
 LDFLAGS = -flto
 DEBFLAGS ?= -us -uc
 VERSION ?= 0.0.1
+export DEBEMAIL=xaonfc@linuxmail.org
+export DEBFULLNAME=xaonfc (Mario)
 
 SRC_DIR = src
 OBJ_DIR = obj

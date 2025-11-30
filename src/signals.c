@@ -23,6 +23,9 @@ static volatile sig_atomic_t pending_signals[MAX_SIGNALS];
 static volatile sig_atomic_t any_pending_signal = 0;
 static int signals_ignored_on_entry[MAX_SIGNALS];
 
+// For interactive mode SIGINT handling
+volatile sig_atomic_t got_sigint = 0;
+
 // Mapping for signal names
 typedef struct {
     const char *name;
@@ -62,6 +65,11 @@ static const SignalMap signal_map[] = {
 };
 
 static void handler(int signum) {
+    // Special handling for SIGINT in interactive mode
+    if (signum == SIGINT && !trap_commands[SIGINT]) {
+        got_sigint = 1;
+    }
+    
     if (signum > 0 && signum < MAX_SIGNALS) {
         pending_signals[signum] = 1;
         any_pending_signal = 1;
@@ -95,6 +103,13 @@ void signal_init(void) {
             }
         }
     }
+    
+    // Install SIGINT handler for interactive mode
+    struct sigaction sigint_sa;
+    sigint_sa.sa_handler = handler;
+    sigemptyset(&sigint_sa.sa_mask);
+    sigint_sa.sa_flags = 0;  // No SA_RESTART - we want to interrupt syscalls
+    sigaction(SIGINT, &sigint_sa, NULL);
 }
 
 int signal_get_number(const char *name) {
@@ -248,4 +263,12 @@ void signal_trigger_exit(void) {
     pending_signals[0] = 1;
     any_pending_signal = 1;
     signal_check_pending();
+}
+
+int signal_check_sigint(void) {
+    if (got_sigint) {
+        got_sigint = 0;
+        return 1;
+    }
+    return 0;
 }

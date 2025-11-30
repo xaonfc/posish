@@ -5,6 +5,7 @@
 
 #include "buf_output.h"
 #include "memalloc.h"
+#include "signals.h"
 #include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
@@ -38,6 +39,11 @@ void buf_out_flush(struct buf_out *buf) {
         ssize_t n = write(buf->fd, buf->start + written, len - written);
         if (n < 0) {
             if (errno == EINTR) {
+                if (got_sigint) {
+                    // Stop writing if SIGINT received
+                    buf->next = buf->start; // Discard buffer
+                    return;
+                }
                 continue;
             }
             // If EPIPE (broken pipe), we might want to exit or stop writing?

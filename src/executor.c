@@ -1613,8 +1613,17 @@ static int execute_simple_command(ASTNode *node) {
 
         char **env = posish_var_get_environ();
         execve(executable, argv, env);
-        // execve failed
-        _exit(126);  // Use _exit() with vfork()
+        // execve failed - print appropriate error
+        if (errno == ENOENT) {
+            dprintf(STDERR_FILENO, "%s: %s: not found\n", "posish", executable);
+            _exit(127);
+        } else if (errno == EACCES) {
+            dprintf(STDERR_FILENO, "%s: %s: Permission denied\n", "posish", executable);
+            _exit(126);
+        } else {
+            dprintf(STDERR_FILENO, "%s: %s: %s\n", "posish", executable, strerror(errno));
+            _exit(126);
+        }
     } else if (pid < 0) {
         error_sys("vfork");
         // No free needed for executable, argv

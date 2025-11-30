@@ -282,7 +282,7 @@ Process ID of the shell's parent process.
 Primary prompt string. Default is "$ ".
 .TP
 .B PS2
-Secondary prompt for line continuation (not yet implemented).
+Secondary prompt for line continuation.
 .TP
 .B PS4
 Trace prompt prefix for
@@ -316,7 +316,7 @@ Parameter expansion ($VAR, ${VAR})
 .IP \(bu
 Command substitution ($(command), `command`)
 .IP \(bu
-Arithmetic expansion ($((expression)))
+Arithmetic expansion ($((expression)), supports +, -, *, /, %)
 .IP \(bu
 Pathname expansion (globbing: *, ?, [...])
 .IP \(bu

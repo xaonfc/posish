@@ -67,7 +67,7 @@ $(OBJ_DIR)/builtin-cmds:
 clean:
 	rm -rf $(OBJ_DIR) $(BIN)
 
-.PHONY: all clean deb
+.PHONY: all clean deb tests help
 
 deb:
 	dch -v $(VERSION)-1 --distribution unstable "Build version $(VERSION)"
@@ -75,3 +75,15 @@ deb:
 	mv ../posish_*.deb .
 	mv ../posish_*.changes .
 	mv ../posish_*.buildinfo .
+
+tests: $(BIN)
+	pytest tests/
+
+help:
+	@echo "Available targets:"
+	@echo "  all       : Build the posish binary (default)"
+	@echo "  clean     : Remove build artifacts"
+	@echo "  deb       : Build Debian package (requires devscripts)"
+	@echo "              Usage: make deb VERSION=1.0.0"
+	@echo "  tests     : Run the Python test suite (requires pytest)"
+	@echo "  help      : Show this help message"

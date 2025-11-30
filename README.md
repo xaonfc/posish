@@ -30,11 +30,15 @@ The execution engine is optimized for low latency and high throughput.
 
 ## Installation
 
-### Prerequisites
+### Dependencies
+#### Mandatory
 - C99 compliant compiler (GCC/Clang)
 - POSIX-compliant C library (glibc, musl)
 - GNU Make
-- Pytest to run the tests suite (optional)
+
+#### Optional
+- **Testing**: Python 3 and `pytest` (to run the test suite)
+- **Packaging**: `debhelper` and `devscripts` (to build Debian packages)
 
 ### Build Instructions
 

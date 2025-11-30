@@ -80,13 +80,13 @@ deb:
 	mv ../posish_*.buildinfo .
 	mv ../posish_*.dsc .
 	mv ../posish_*.tar.xz .
-	mv ../posish_*.ddeb .
+	mv ../posish-dbgsym_*.ddeb .
 
 tests: $(BIN)
 	pytest tests/
 
 distclean: clean
-	rm -f posish_*.deb posish_*.changes posish_*.buildinfo posish_*.dsc posish_*.tar.xz posish_*.ddeb
+	rm -f posish_*.deb posish_*.changes posish_*.buildinfo posish_*.dsc posish_*.tar.xz posish-dbgsym_*.ddeb
 	rm -rf debian/.debhelper debian/posish debian/files debian/*.substvars debian/debhelper-build-stamp debian/changelog.dch
 
 help:

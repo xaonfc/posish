@@ -72,10 +72,12 @@ clean:
 deb:
 	rm -f debian/changelog.dch
 	dch -v $(VERSION)-1 --distribution unstable "Build version $(VERSION)"
-	dpkg-buildpackage $(DEBFLAGS) -b
+	dpkg-buildpackage $(DEBFLAGS)
 	mv ../posish_*.deb .
 	mv ../posish_*.changes .
 	mv ../posish_*.buildinfo .
+	mv ../posish_*.dsc .
+	mv ../posish_*.tar.xz .
 
 tests: $(BIN)
 	pytest tests/

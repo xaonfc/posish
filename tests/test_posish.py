@@ -4,7 +4,15 @@ import pytest
 import shutil
 import tempfile
 
-POSISH_PATH = os.path.abspath("./posish")
+import platform
+
+# Determine binary path based on OS (Meson build layout)
+SYSTEM = platform.system()
+POSISH_PATH = os.path.abspath(f"./build_{SYSTEM}/posish")
+
+# Fallback to root if not found (e.g. manual copy)
+if not os.path.exists(POSISH_PATH) and os.path.exists("./posish"):
+    POSISH_PATH = os.path.abspath("./posish")
 
 def run_posish(command, input_data=None):
     """Runs a command string in posish and returns (stdout, stderr, return_code)."""

@@ -34,7 +34,7 @@ The execution engine is optimized for low latency and high throughput.
 #### Mandatory
 - C99 compliant compiler (GCC/Clang)
 - POSIX-compliant C library (glibc, musl)
-- GNU Make
+- Meson and Ninja
 
 #### Optional
 - **Testing**: Python 3 and `pytest` (to run the test suite)
@@ -45,7 +45,7 @@ The execution engine is optimized for low latency and high throughput.
 ```bash
 git clone https://github.com/xaonfc/posish.git
 cd posish
-make
+./build.sh
 ```
 
 This produces the `posish` binary in the project root.
@@ -63,7 +63,7 @@ Detailed technical documentation is available in the `docs/` directory:
 
 posish operates as a standard command interpreter:
 
-```bash
+```sh
 # Interactive mode
 ./posish
 
@@ -76,7 +76,7 @@ posish operates as a standard command interpreter:
 
 ### Trace Mode
 Enable execution tracing for debugging:
-```bash
+```sh
 ./posish -x script.sh
 ```
 
@@ -85,7 +85,7 @@ Enable execution tracing for debugging:
 Contributions are welcome. Please adhere to the following guidelines:
 1.  **Strict POSIX Compliance**: All features must align with IEEE Std 1003.1-2017.
 2.  **Code Style**: Follow the existing C99 style guide.
-3.  **Testing**: Ensure all regression tests pass (`make test`).
+3.  **Testing**: Ensure all regression tests pass (`./build.sh test`).
 4.  **Documentation**: Update relevant documentation in `docs/`.
 
 ## License

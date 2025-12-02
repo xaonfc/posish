@@ -852,7 +852,7 @@ static char **expand_word_internal(const char *word, int allow_split) {
                     
                     var_len = i - start;
                     var_name = xmalloc(var_len + 1);
-                    strncpy(var_name, input + start, var_len);
+                    memcpy(var_name, input + start, var_len);
                     var_name[var_len] = '\0';
                     
                     // If it's a length operation, get the value and append its length
@@ -891,7 +891,7 @@ static char **expand_word_internal(const char *word, int allow_split) {
                             while (i < len && input[i] != '}') i++;
                             size_t val_len = i - val_start;
                             default_value = mem_stack_alloc(val_len + 1);
-                            strncpy(default_value, input + val_start, val_len);
+                            memcpy(default_value, input + val_start, val_len);
                             default_value[val_len] = '\0';
                         } else {
                             // Invalid syntax like ${var:2} (ksh/bash substring not supported)
@@ -915,7 +915,7 @@ static char **expand_word_internal(const char *word, int allow_split) {
                         while (i < len && input[i] != '}') i++;
                         size_t pat_len = i - pat_start;
                         pattern = mem_stack_alloc(pat_len + 1);
-                        strncpy(pattern, input + pat_start, pat_len);
+                        memcpy(pattern, input + pat_start, pat_len);
                         pattern[pat_len] = '\0';
                     } else {
                         // No operator, skip to }
@@ -1024,7 +1024,7 @@ static char **expand_word_internal(const char *word, int allow_split) {
                     }
                     
                     var_name = xmalloc(var_len + 1);
-                    strncpy(var_name, input + start, var_len);
+                    memcpy(var_name, input + start, var_len);
                     var_name[var_len] = '\0';
                 }
                 
@@ -1119,7 +1119,7 @@ static char **expand_word_internal(const char *word, int allow_split) {
              }
              size_t cmd_len = i - start;
              char *cmd = mem_stack_alloc(cmd_len + 1);
-             strncpy(cmd, input + start, cmd_len);
+             memcpy(cmd, input + start, cmd_len);
              cmd[cmd_len] = '\0';
              if (i < len) i++; 
              

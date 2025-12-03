@@ -9,6 +9,7 @@
 #include "builtins.h"
 #include "variables.h"
 #include "memalloc.h"
+#include "buf_output.h"
 
 // Helper to check if a char is in IFS
 static int is_ifs(char c, const char *ifs) {
@@ -55,6 +56,9 @@ int builtin_read(char **argv) {
     size_t capacity = 0;
     size_t len = 0;
     int continuation = 0;
+
+    // Flush stdout before reading to ensure prompts are visible
+    OUT_FLUSH();
 
     do {
         char *buf = NULL;

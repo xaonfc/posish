@@ -16,6 +16,11 @@
 
 #include <strings.h>
 
+/* SA_RESTART may not be defined on all systems (e.g., older QNX) */
+#ifndef SA_RESTART
+#define SA_RESTART 0
+#endif
+
 #define MAX_SIGNALS 64
 
 static char *trap_commands[MAX_SIGNALS];

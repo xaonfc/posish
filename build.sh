@@ -113,13 +113,146 @@ case "$1" in
         echo "Binary location: $BUILD_DIR/posish"
         exit 0
         ;;
+    target=*|--target=*)
+        # Cross-compilation for different operating systems
+        TARGET=$(echo "$1" | cut -d= -f2)
+        case "$TARGET" in
+            qnx)
+                echo "==> Cross-compiling for QNX..."
+                
+                # Check QNX SDP environment
+                if [ -z "$QNX_HOST" ]; then
+                    if [ -f "$HOME/qnx800/qnxsdp-env.sh" ]; then
+                        echo "Sourcing QNX SDP environment..."
+                        . "$HOME/qnx800/qnxsdp-env.sh"
+                    elif [ -f "$HOME/qnx710/qnxsdp-env.sh" ]; then
+                        . "$HOME/qnx710/qnxsdp-env.sh"
+                    else
+                        echo "Error: QNX SDP environment not found."
+                        echo "Please source qnxsdp-env.sh first or install QNX SDP."
+                        exit 1
+                    fi
+                fi
+                
+                # Verify QNX environment variables
+                if [ -z "$QNX_HOST" ] || [ -z "$QNX_TARGET" ]; then
+                    echo "Error: QNX_HOST or QNX_TARGET not set."
+                    echo "Please source qnxsdp-env.sh from your QNX SDP installation."
+                    exit 1
+                fi
+                
+                # Check for cross-compiler
+                QNX_GCC="$QNX_HOST/usr/bin/ntox86_64-gcc"
+                if [ ! -x "$QNX_GCC" ]; then
+                    echo "Error: QNX cross-compiler not found at $QNX_GCC"
+                    exit 1
+                fi
+                
+                # Generate cross-file dynamically
+                echo "Generating qnx-x86_64.txt cross-file..."
+                cat > qnx-x86_64.txt << EOF
+[binaries]
+c = '$QNX_HOST/usr/bin/ntox86_64-gcc'
+cpp = '$QNX_HOST/usr/bin/ntox86_64-g++'
+ar = '$QNX_HOST/usr/bin/ntox86_64-ar'
+strip = '$QNX_HOST/usr/bin/ntox86_64-strip'
+
+[built-in options]
+c_args = ['-D_QNX_SOURCE']
+
+[properties]
+sys_root = '$QNX_TARGET'
+
+[host_machine]
+system = 'qnx'
+cpu_family = 'x86_64'
+cpu = 'x86_64'
+endian = 'little'
+EOF
+                
+                BUILD_DIR="build_qnx"
+                if [ ! -d "$BUILD_DIR" ]; then
+                    meson setup "$BUILD_DIR" . --cross-file qnx-x86_64.txt
+                fi
+                ninja -C "$BUILD_DIR"
+                echo ""
+                echo "QNX build complete."
+                echo "Binary location: $BUILD_DIR/posish"
+                exit 0
+                ;;
+            *)
+                echo "Error: Unknown target OS '$TARGET'"
+                echo "Available targets: qnx"
+                exit 1
+                ;;
+        esac
+        ;;
+    arch=*|--arch=*)
+        # Cross-compilation for different architectures (Linux)
+        ARCH=$(echo "$1" | cut -d= -f2)
+        case "$ARCH" in
+            aarch64|arm64)
+                echo "==> Cross-compiling for AArch64 (ARM64) Linux..."
+                
+                # Check for cross-compiler
+                if ! command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then
+                    echo "Error: aarch64-linux-gnu-gcc not found."
+                    echo "Install with: sudo apt install gcc-aarch64-linux-gnu"
+                    exit 1
+                fi
+                
+                # Create cross-file if it doesn't exist
+                if [ ! -f "aarch64-linux.txt" ]; then
+                    echo "Creating aarch64-linux.txt cross-file..."
+                    cat > aarch64-linux.txt << 'EOF'
+[binaries]
+c = 'aarch64-linux-gnu-gcc'
+cpp = 'aarch64-linux-gnu-g++'
+ar = 'aarch64-linux-gnu-ar'
+strip = 'aarch64-linux-gnu-strip'
+
+[host_machine]
+system = 'linux'
+cpu_family = 'aarch64'
+cpu = 'aarch64'
+endian = 'little'
+EOF
+                fi
+                
+                BUILD_DIR="build_aarch64"
+                if [ ! -d "$BUILD_DIR" ]; then
+                    meson setup "$BUILD_DIR" . --cross-file aarch64-linux.txt
+                fi
+                ninja -C "$BUILD_DIR"
+                echo ""
+                echo "AArch64 Linux build complete."
+                echo "Binary location: $BUILD_DIR/posish"
+                exit 0
+                ;;
+            *)
+                echo "Error: Unknown architecture '$ARCH'"
+                echo "Available architectures: aarch64"
+                exit 1
+                ;;
+        esac
+        ;;
     help|--help|-h)
-        echo "Usage: $0 [clean|wipe|deb|test]"
-        echo "  (no args) : Build the project"
-        echo "  clean     : Clean build artifacts (ninja clean)"
-        echo "  wipe      : Remove build directory completely"
-        echo "  deb       : Build Debian package (.deb)"
-        echo "  test      : Run test suite (pytest)"
+        echo "Usage: $0 [command]"
+        echo ""
+        echo "Commands:"
+        echo "  (no args)      : Build the project for current platform"
+        echo "  clean          : Clean build artifacts (ninja clean)"
+        echo "  wipe           : Remove build directory completely"
+        echo "  deb            : Build Debian package (.deb)"
+        echo "  test           : Run test suite (pytest)"
+        echo "  asan           : Build with AddressSanitizer"
+        echo ""
+        echo "Cross-compilation:"
+        echo "  target=<os>    : Cross-compile for a different OS"
+        echo "    target=qnx   : QNX Neutrino (requires QNX SDP)"
+        echo ""
+        echo "  arch=<arch>    : Cross-compile for a different architecture (Linux)"
+        echo "    arch=aarch64 : ARM64 Linux (requires gcc-aarch64-linux-gnu)"
         exit 0
         ;;
 esac

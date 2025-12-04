@@ -45,3 +45,6 @@ tests/__pycache__
 *.tar.xz
 *.ddeb
 
+# Cross-compilation (auto-generated)
+qnx-x86_64.txt
+aarch64-linux.txt

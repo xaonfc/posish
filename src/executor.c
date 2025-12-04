@@ -29,9 +29,15 @@
 /* 
  * vfork() was removed from POSIX.1-2008, so _POSIX_C_SOURCE=200809L hides it.
  * We explicitly declare it here because we want the performance benefits
- * of vfork() on systems that support it (Linux, BSDs), even when compiling
+ * of vfork() on systems that support it (Linux, BSDs, QNX), even when compiling
  * in strict POSIX mode.
+ * 
+ * On QNX, vfork() is deprecated but still functional and faster than fork().
+ * We suppress the deprecation warning to maintain performance.
  */
+#if defined(__QNX__)
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
 #if defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 200809L
 extern pid_t vfork(void);
 #endif

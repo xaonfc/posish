@@ -64,10 +64,22 @@ inc = include_directories('include')
 cc = meson.get_compiler('c')
 add_project_arguments('-D_XOPEN_SOURCE=700', '-D_DEFAULT_SOURCE', language : 'c')
 
+# QNX Support
+deps = []
+if host_machine.system() == 'qnx'
+  add_project_arguments('-D_QNX_SOURCE', language : 'c')
+  # QNX often needs libsocket for networking (if we use it)
+  socket_dep = cc.find_library('socket', required : false)
+  if socket_dep.found()
+    deps += socket_dep
+  endif
+endif
+
 # Executable
 executable('posish',
   sources,
   include_directories : inc,
+  dependencies : deps,
   install : true)
 
 # Man page

@@ -30,6 +30,11 @@
 #define HOST_NAME_MAX 255
 #endif
 
+/* SA_RESTART may not be defined on all systems (e.g., QNX) */
+#ifndef SA_RESTART
+#define SA_RESTART 0
+#endif
+
 extern char **environ;
 
 void sigchld_handler(int sig) {
@@ -141,9 +146,6 @@ void print_prompt(void) {
 }
 
 // Forward declaration
-
-
-
 
 static int run_script_file(const char *filename) {
     FILE *file = fopen(filename, "r");

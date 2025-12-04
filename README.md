@@ -28,6 +28,15 @@ The execution engine is optimized for low latency and high throughput.
 - **Fast-Path Parsing**: Optimized lexer/parser paths for common trivial commands (e.g., assignments, no-ops) reduce execution overhead.
 - **Syscall Reduction**: Aggressive buffering and signal initialization strategies minimize kernel boundary crossings.
 
+## OS Support
+
+posish has been succesfully ported to the following operating systems:
+- Linux
+- QNX
+- FreeBSD
+
+More ports are in progress.
+
 ## Installation
 
 ### Dependencies
@@ -42,13 +51,30 @@ The execution engine is optimized for low latency and high throughput.
 
 ### Build Instructions
 
-```bash
+```sh
 git clone https://github.com/xaonfc/posish.git
 cd posish
 ./build.sh
 ```
 
 This produces the `posish` binary in the project root.
+
+### Cross-Compilation
+
+posish supports cross-compilation for multiple platforms:
+
+```sh
+# Build for different operating systems
+./build.sh target=qnx      # QNX Neutrino (requires QNX SDP)
+
+# Build for different architectures (Linux)
+./build.sh arch=aarch64    # ARM64 Linux
+```
+
+| Option | Build Dir | Requirements |
+|--------|-----------|--------------|
+| `target=qnx` | `build_qnx/` | QNX SDP, `qnx-x86_64.txt` cross-file |
+| `arch=aarch64` | `build_aarch64/` | `gcc-aarch64-linux-gnu` package |
 
 ## Documentation
 

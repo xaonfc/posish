@@ -103,6 +103,16 @@ case "$1" in
         pytest tests/
         exit 0
         ;;
+    asan)
+        echo "==> Building with AddressSanitizer..."
+        BUILD_DIR="build_ASAN"
+        if [ ! -d "$BUILD_DIR" ]; then
+            meson setup "$BUILD_DIR" . -Db_sanitize=address -Dbuildtype=debug
+        fi
+        ninja -C "$BUILD_DIR"
+        echo "Binary location: $BUILD_DIR/posish"
+        exit 0
+        ;;
     help|--help|-h)
         echo "Usage: $0 [clean|wipe|deb|test]"
         echo "  (no args) : Build the project"

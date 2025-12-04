@@ -116,6 +116,7 @@ static struct var *find_var(const char *name) {
 }
 
 int posish_var_set(const char *name, const char *value) {
+    if (!value) value = ""; // Safety fallback
     size_t len;
     unsigned long h = hash_djb2(name, &len);
     
@@ -129,13 +130,13 @@ int posish_var_set(const char *name, const char *value) {
             }
             if (v->value != value) { // Avoid self-assignment issues if pointers match
                  size_t new_len = strlen(value);
-                 size_t old_len = strlen(v->value);
+                 size_t old_len = v->value ? strlen(v->value) : 0;
                  
                  // OPTIMIZATION: Reuse buffer if new value fits
-                 if (new_len <= old_len) {
+                 if (v->value && new_len <= old_len) {
                      strcpy(v->value, value);
                  } else {
-                     free(v->value);
+                     if (v->value) free(v->value);
                      v->value = xstrdup(value);
                  }
             }

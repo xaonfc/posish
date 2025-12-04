@@ -53,6 +53,7 @@ int builtin_command(char **argv) {
             } else {
                 printf("%s\n", cmd_name);
             }
+            fflush(stdout);
             return 0;
         }
         
@@ -75,6 +76,7 @@ int builtin_command(char **argv) {
                 } else {
                     printf("%s\n", full_path);
                 }
+                fflush(stdout); // Ensure output goes to redirected FD
                 free(path_copy);
                 return 0;
             }

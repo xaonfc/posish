@@ -1,6 +1,3 @@
-# POSIX standard (cannot include since it's copyrighted)
-docs/susv4-2018
-
 # Build artifacts
 build/
 build_*/

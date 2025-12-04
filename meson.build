@@ -21,6 +21,7 @@ sources = files(
   'src/buf_output.c',
   'src/line_editor.c',
   'src/ast.c',
+  'src/redirection.c',
   'src/builtin-cmds/cd.c',
   'src/builtin-cmds/exit.c',
   'src/builtin-cmds/export.c',

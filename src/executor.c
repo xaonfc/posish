@@ -23,6 +23,8 @@
 #include <pwd.h>
 #include "functions.h"
 #include "signals.h"
+#include "redirection.h"
+#include "buf_output.h"
 
 /* 
  * vfork() was removed from POSIX.1-2008, so _POSIX_C_SOURCE=200809L hides it.
@@ -82,103 +84,7 @@ char *find_executable(const char *command) {
     return result;
 }
 
-#include "buf_output.h" // Added
 
-static int handle_redirections(Redirection *redirs, size_t count) {
-    for (size_t i = 0; i < count; i++) {
-        Redirection *r = &redirs[i];
-        
-        // Flush buffered output if redirecting stdout
-        if (r->io_number == STDOUT_FILENO) {
-            buf_out_flush_all();
-        }
-        
-        int fd = -1;
-        int flags = 0;
-        int mode = 0666;
-        
-        if (r->type == REDIR_IN) {
-            fd = open(r->filename, O_RDONLY);
-            if (fd < 0) {
-                error_sys("open: %s", r->filename);
-                return 1;
-            }
-            if (dup2(fd, r->io_number) < 0) {
-                error_sys("dup2");
-                close(fd);
-                return 1;
-            }
-            close(fd);
-        } else if (r->type == REDIR_OUT || r->type == REDIR_OUT_CLOBBER) {
-            flags = O_WRONLY | O_CREAT | O_TRUNC;
-            fd = open(r->filename, flags, mode);
-            if (fd < 0) {
-                error_sys("open: %s", r->filename);
-                return 1;
-            }
-            if (dup2(fd, r->io_number) < 0) {
-                error_sys("dup2");
-                close(fd);
-                return 1;
-            }
-            close(fd);
-        } else if (r->type == REDIR_APPEND) {
-            flags = O_WRONLY | O_CREAT | O_APPEND;
-            fd = open(r->filename, flags, mode);
-            if (fd < 0) {
-                error_sys("open: %s", r->filename);
-                return 1;
-            }
-            if (dup2(fd, r->io_number) < 0) {
-                error_sys("dup2");
-                close(fd);
-                return 1;
-            }
-            close(fd);
-        } else if (r->type == REDIR_IN_DUP || r->type == REDIR_OUT_DUP) {
-            int target_fd = atoi(r->filename);
-            if (dup2(target_fd, r->io_number) < 0) {
-                error_sys("dup2");
-                return 1;
-            }
-        } else if (r->type == REDIR_RDWR) {
-            flags = O_RDWR | O_CREAT;
-            fd = open(r->filename, flags, mode);
-            if (fd < 0) {
-                error_sys("open: %s", r->filename);
-                return 1;
-            }
-            if (dup2(fd, r->io_number) < 0) {
-                error_sys("dup2");
-                close(fd);
-                return 1;
-            }
-            close(fd);
-        } else if (r->type == REDIR_HEREDOC || r->type == REDIR_HEREDOC_DASH) {
-            char template[] = "/tmp/posish_heredoc_XXXXXX";
-            int fd = mkstemp(template);
-            if (fd < 0) {
-                error_sys("mkstemp");
-                return 1;
-            }
-            unlink(template);
-            
-            if (r->here_doc_content) {
-                ssize_t written = write(fd, r->here_doc_content, strlen(r->here_doc_content));
-                (void)written; // Ignore errors in here-doc write for now
-            }
-            lseek(fd, 0, SEEK_SET);
-            
-            if (dup2(fd, STDIN_FILENO) < 0) {
-                error_sys("dup2");
-                close(fd);
-                return 1;
-            }
-            close(fd);
-        }
-    }
-    return 0;
-}
 
 #include "parser.h"
 
@@ -366,12 +272,9 @@ static char *execute_subshell_capture(const char *cmd_str) {
 
     // Use vfork() if safe (no state modification), otherwise fork()
     // CRITICAL: Must check safety because vfork shares memory with parent!
-    pid_t pid;
-    if (is_safe_for_vfork(node)) {
-        pid = vfork();
-    } else {
-        pid = fork();
-    }
+    // Use fork() instead of vfork() to prevent memory corruption
+    // vfork() shares address space, and child modifying stack/heap can corrupt parent
+    pid_t pid = fork();
     if (pid == 0) {
         close(pipefd[0]);
         dup2(pipefd[1], STDOUT_FILENO);
@@ -1387,6 +1290,10 @@ static int execute_simple_command(ASTNode *node) {
     
     for (size_t i = 0; i < node->data.command.assignment_count; i++) {
         char *expanded_val = expand_word(node->data.command.assignments[i].value);
+        if (!expanded_val) {
+            // Expansion failed (e.g. unbound variable)
+            return 1;
+        }
         if (posish_var_set(node->data.command.assignments[i].name, expanded_val) != 0) {
             // Assignment failed (readonly variable)
             return 1;
@@ -1554,23 +1461,28 @@ static int execute_simple_command(ASTNode *node) {
     int test_res = try_test_fast_path(argc, argv);
     if (test_res != -1) return test_res;
 
+    // Builtin execution with robust argument handling
     if (builtin_is_builtin(argv[0])) {
-        int is_exec_no_args = (strcmp(argv[0], "exec") == 0 && argc == 1);
+        // CRITICAL FIX: Copy all argv strings to heap to isolate from mem_stack
+        // The mem_stack allocator can be reset or reused during builtin execution
+        // (e.g. in loops), invalidating stack pointers.
+        char **heap_argv = xmalloc((argc + 1) * sizeof(char*));
+        for (size_t i = 0; i < argc; i++) {
+            heap_argv[i] = xstrdup(argv[i]);
+        }
+        heap_argv[argc] = NULL;
+
         int has_redirections = (node->data.command.redirection_count > 0);
-        
         int saved_stdin = -1, saved_stdout = -1, saved_stderr = -1;
-        
-        // Only save FDs if we have redirections or exec command
-        if (!is_exec_no_args && has_redirections) {
+
+        if (has_redirections) {
             saved_stdin = dup(STDIN_FILENO);
             saved_stdout = dup(STDOUT_FILENO);
             saved_stderr = dup(STDERR_FILENO);
         }
 
         if (has_redirections && handle_redirections(node->data.command.redirections, node->data.command.redirection_count) != 0) {
-            // No free needed for argv
-            
-            if (!is_exec_no_args && has_redirections) {
+            if (has_redirections) {
                 buf_out_flush_all();
                 dup2(saved_stdin, STDIN_FILENO);
                 dup2(saved_stdout, STDOUT_FILENO);
@@ -1579,13 +1491,17 @@ static int execute_simple_command(ASTNode *node) {
                 close(saved_stdout);
                 close(saved_stderr);
             }
+            // Free heap copy
+            for (size_t i = 0; i < argc; i++) {
+                free(heap_argv[i]);
+            }
+            free(heap_argv);
             return 1;
         }
 
-        int status = builtin_run(argv);
+        int status = builtin_run(heap_argv);
         
-        // Only restore FDs if we saved them
-        if (!is_exec_no_args && has_redirections) {
+        if (has_redirections) {
             buf_out_flush_all();
             dup2(saved_stdin, STDIN_FILENO);
             dup2(saved_stdout, STDOUT_FILENO);
@@ -1595,15 +1511,19 @@ static int execute_simple_command(ASTNode *node) {
             close(saved_stderr);
         }
 
-        // for (size_t i = 0; i < argc; i++) free(argv[i]);
-        // free(argv);
+        // Free heap copy
+        for (size_t i = 0; i < argc; i++) {
+            free(heap_argv[i]);
+        }
+        free(heap_argv);
+        
         return status;
     }
 
+    // External command execution
     char *executable = find_executable(argv[0]);
     if (!executable) {
-        error_msg("%s: not found", argv[0]);
-        // No free needed for argv
+        fprintf(stderr, "%s: command not found\n", argv[0]);
         return 127;
     }
 
@@ -1614,9 +1534,13 @@ static int execute_simple_command(ASTNode *node) {
     sigaddset(&mask, SIGCHLD);
     sigprocmask(SIG_BLOCK, &mask, &oldmask);
 
-    // OPTIMIZATION: Use vfork() instead of fork() for external commands
-    buf_out_flush_all();
-    pid_t pid = vfork();
+    // Prepare environment in parent to avoid heap allocation in child (vfork safety)
+    char **env = posish_var_get_environ();
+
+    // Use fork() instead of vfork() for safety
+    // vfork() shares address space and is dangerous if child modifies state
+    pid_t pid = fork();
+    
     if (pid == 0) {
         // Child process - restore signal mask
         sigprocmask(SIG_SETMASK, &oldmask, NULL);
@@ -1629,10 +1553,9 @@ static int execute_simple_command(ASTNode *node) {
         
         if (handle_redirections(node->data.command.redirections, 
                               node->data.command.redirection_count) != 0) {
-            _exit(1);  // Use _exit() with vfork()
+            _exit(1);
         }
 
-        char **env = posish_var_get_environ();
         execve(executable, argv, env);
         // execve failed - print appropriate error
         if (errno == ENOENT) {
@@ -1647,12 +1570,25 @@ static int execute_simple_command(ASTNode *node) {
         }
     } else if (pid < 0) {
         sigprocmask(SIG_SETMASK, &oldmask, NULL); // Restore mask on error
-        error_sys("vfork");
-        // No free needed for executable, argv
+        error_sys("fork");
+        // Free env
+        for (int i = 0; env[i]; i++) free(env[i]);
+        free(env);
         return 1;
     }
 
-    setpgid(pid, pid);
+    // Parent process
+    
+    // Free environment array (deep free)
+    for (int i = 0; env[i]; i++) free(env[i]);
+    free(env);
+
+    // Only set process group if job control is enabled
+    // Otherwise external commands should share the shell's PGID
+    if (shell_monitor) {
+        setpgid(pid, pid);
+    }
+    
     Job *j = job_add(pid, argv[0], JOB_RUNNING);
     posish_var_set_last_bg_pid(pid);
     
@@ -1666,8 +1602,6 @@ static int execute_simple_command(ASTNode *node) {
         got_sigint = 1;
     }
     
-    // No free needed for executable, argv
-
     return status;
 }
 

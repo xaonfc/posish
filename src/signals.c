@@ -4,6 +4,7 @@
 #include "signals.h"
 #include "executor.h"
 #include "memalloc.h"
+#include "buf_output.h"
 #include "lexer.h"
 #include "parser.h"
 #include "variables.h"
@@ -172,7 +173,7 @@ int signal_trap(int signum, const char *command) {
             struct sigaction sa;
             sa.sa_handler = handler;
             sigemptyset(&sa.sa_mask);
-            sa.sa_flags = SA_RESTART;
+            sa.sa_flags = 0; // No SA_RESTART - allow syscalls to be interrupted
             sigaction(signum, &sa, NULL);
         }
     } else {
@@ -239,18 +240,30 @@ void signal_check_pending(void) {
         if (pending_signals[i]) {
             pending_signals[i] = 0;
             if (trap_commands[i]) {
+                // Flush buffers before executing trap to ensure output integrity
+                buf_out_flush_all();
+
                 // Execute trap command
                 // We need to parse and execute it.
                 // Using a temporary lexer/parser/executor flow.
                 // Note: This interrupts current flow.
                 // POSIX says: "The action of trap shall be read and executed by the shell when one of the corresponding conditions arises."
                 
+                // Prevent recursion for EXIT trap (0)
+                char *cmd_to_run = NULL;
+                if (i == 0) {
+                    cmd_to_run = trap_commands[i];
+                    trap_commands[i] = NULL; // Clear it so it doesn't run again if exit is called
+                } else {
+                    cmd_to_run = xstrdup(trap_commands[i]);
+                }
+
                 // We should probably save/restore exit status?
                 // POSIX: "The value of "$?" after the trap action completes shall be the value it had before trap was invoked."
                 int saved_status = executor_get_last_status();
                 
                 Lexer lexer;
-                lexer_init(&lexer, trap_commands[i]);
+                lexer_init(&lexer, cmd_to_run);
                 ASTNode *node = parser_parse(&lexer);
                 if (node) {
                     executor_execute(node);
@@ -258,6 +271,8 @@ void signal_check_pending(void) {
                 }
                 
                 executor_set_last_status(saved_status);
+                
+                free(cmd_to_run);
             }
         }
     }

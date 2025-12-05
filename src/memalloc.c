@@ -112,39 +112,10 @@ void mem_stack_pop_mark(struct stackmark *mark) {
     sstrend = stacknxt + stacknleft;
 }
 
-/* String building functions - Simplified for now */
-/* We will implement full string growing later if needed. 
-   For now, we provide stubs or basic implementations. */
-
-void *mem_stack_grow_str(void) {
-    // TODO: Implement proper string growing
-    outofspace(); // Fail if we exceed block size for now
-    return NULL;
-}
-
-char *mem_stack_grow_to(size_t len) {
-    (void)len;
-    // TODO
-    return NULL;
-}
-
-char *mem_stack_make_space(size_t n, char *p) {
-    (void)n;
-    (void)p;
-    // TODO
-    return NULL;
-}
-
-char *mem_stack_put_s(const char *s, char *p) {
-    (void)s;
-    (void)p;
-    // TODO
-    return NULL;
-}
-
+/* Finalize a string being built on the stack */
 void *mem_stack_grab_str(char *p) {
     size_t len = p - stacknxt;
-    return mem_stack_alloc(len); // This effectively finalizes it
+    return mem_stack_alloc(len);
 }
 
 void *mem_stack_realloc_array(void *ptr, size_t old_count, size_t new_count, size_t element_size) {

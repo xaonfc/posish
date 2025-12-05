@@ -394,6 +394,7 @@ static char *execute_subshell_capture(const char *cmd_str) {
     buffer[size] = '\0';
     
     waitpid(pid, NULL, 0);
+    signal_check_pending(); // Check for pending signals after wait
     
     while (size > 0 && buffer[size - 1] == '\n') {
         buffer[--size] = '\0';
@@ -1689,6 +1690,7 @@ static int execute_simple_command(ASTNode *node) {
     posish_var_set_last_bg_pid(pid);
     
     int status = job_wait(j);
+    signal_check_pending(); // Check for pending signals after wait
     
     // Restore signal mask
     sigprocmask(SIG_SETMASK, &oldmask, NULL);
@@ -1735,6 +1737,7 @@ static int execute_pipeline(ASTNode *node) {
     int status1, status2;
     waitpid(pid1, &status1, 0);
     waitpid(pid2, &status2, 0);
+    signal_check_pending(); // Check for pending signals after wait
 
     if (WIFEXITED(status2)) {
         return WEXITSTATUS(status2);
@@ -2087,6 +2090,7 @@ static int execute_subshell(ASTNode *node) {
     } else if (pid > 0) {
         int status;
         waitpid(pid, &status, 0);
+        signal_check_pending(); // Check for pending signals after wait
         if (WIFEXITED(status)) {
             return WEXITSTATUS(status);
         }

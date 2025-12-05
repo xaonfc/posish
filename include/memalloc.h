@@ -40,25 +40,6 @@ void mem_stack_push_mark(struct stackmark *mark);
 void mem_stack_pop_mark(struct stackmark *mark);
 void *mem_stack_realloc_array(void *ptr, size_t old_count, size_t new_count, size_t element_size);
 
-/* String building API */
-void *mem_stack_grow_str(void);
-char *mem_stack_grow_to(size_t len);
-char *mem_stack_make_space(size_t n, char *p);
-char *mem_stack_put_s(const char *s, char *p);
-
-/* Macros for efficient character pushing */
-#define MEM_STACK_PUTC(c, p) ((p) = _mem_stack_putc((c), (p)))
-
-static inline char *_mem_stack_putc(int c, char *p) {
-    if (stacknleft == 0) {
-        p = mem_stack_grow_str();
-    }
-    *p++ = c;
-    stacknleft--;
-    stacknxt = p;
-    return p;
-}
-
 /* Helper to get current string start */
 #define mem_stack_block() ((void *)stacknxt)
 

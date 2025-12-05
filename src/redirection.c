@@ -61,10 +61,14 @@ int handle_redirections(Redirection *redirs, size_t count) {
             }
             close(fd);
         } else if (r->type == REDIR_IN_DUP || r->type == REDIR_OUT_DUP) {
-            int target_fd = atoi(r->filename);
-            if (dup2(target_fd, r->io_number) < 0) {
-                error_sys("dup2");
-                return 1;
+            if (r->filename[0] == '-' && r->filename[1] == '\0') {
+                close(r->io_number);
+            } else {
+                int target_fd = atoi(r->filename);
+                if (dup2(target_fd, r->io_number) < 0) {
+                    error_sys("dup2");
+                    return 1;
+                }
             }
         } else if (r->type == REDIR_RDWR) {
             flags = O_RDWR | O_CREAT;
@@ -81,7 +85,7 @@ int handle_redirections(Redirection *redirs, size_t count) {
             close(fd);
         } else if (r->type == REDIR_HEREDOC || r->type == REDIR_HEREDOC_DASH) {
             char template[] = "/tmp/posish_heredoc_XXXXXX";
-            int fd = mkstemp(template);
+            fd = mkstemp(template);
             if (fd < 0) {
                 error_sys("mkstemp");
                 return 1;
@@ -89,12 +93,13 @@ int handle_redirections(Redirection *redirs, size_t count) {
             unlink(template);
             
             if (r->here_doc_content) {
-                ssize_t written = write(fd, r->here_doc_content, strlen(r->here_doc_content));
-                (void)written; // Ignore errors in here-doc write for now
+                if (write(fd, r->here_doc_content, strlen(r->here_doc_content)) < 0) {
+                    // Ignore write error for now, but at least check it to satisfy compiler
+                }
             }
             lseek(fd, 0, SEEK_SET);
             
-            if (dup2(fd, STDIN_FILENO) < 0) {
+            if (dup2(fd, r->io_number) < 0) {
                 error_sys("dup2");
                 close(fd);
                 return 1;

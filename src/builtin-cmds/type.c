@@ -34,7 +34,7 @@ int builtin_type(char **args) {
         }
         
         // Check function
-        if (func_get(name)) {
+        if (func_lookup(name)) {
             printf("%s is a function\n", name);
             continue;
         }

@@ -46,21 +46,31 @@ typedef struct {
     char *here_doc_content; // Content for << and <<-
 } Redirection;
 
+typedef struct {
+    char *name;
+    char *value;
+} Assignment;
+
+typedef struct {
+    char **args; // NULL terminated array of strings
+    size_t arg_count;
+    Redirection *redirections;
+    size_t redirection_count;
+    Assignment *assignments;
+    size_t assignment_count;
+} CommandNode;
+
+typedef struct {
+    char *word;
+    CaseItem *items;
+    size_t item_count;
+} CaseNode;
+
 typedef struct ASTNode {
     NodeType type;
     int lineno; // Line number from source
     union {
-        struct {
-            char **args; // NULL terminated array of strings
-            size_t arg_count;
-            Redirection *redirections;
-            size_t redirection_count;
-            struct {
-                char *name;
-                char *value;
-            } *assignments;
-            size_t assignment_count;
-        } command;
+        CommandNode command;
         struct {
             struct ASTNode *left;
             struct ASTNode *right;
@@ -99,11 +109,7 @@ typedef struct ASTNode {
             char *name;
             struct ASTNode *body;
         } function;
-        struct {
-            char *word;
-            CaseItem *items;
-            size_t item_count;
-        } case_stmt;
+        CaseNode case_stmt;
     } data;
 } ASTNode;
 

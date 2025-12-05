@@ -225,7 +225,7 @@ static char *execute_subshell_capture(const char *cmd_str) {
         node->data.command.redirection_count == 0 &&
         !builtin_is_builtin(node->data.command.args[0])) {
             
-        ASTNode *body = func_get(node->data.command.args[0]);
+        ASTNode *body = func_lookup(node->data.command.args[0]);
         if (body) {
             // Unwrap group { ... }
             if (body->type == NODE_GROUP) body = body->data.group.body;
@@ -1458,7 +1458,7 @@ static int execute_simple_command(ASTNode *node) {
         fprintf(stderr, "\n");
     }
 
-    ASTNode *func_body = func_get(argv[0]);
+    ASTNode *func_body = func_lookup(argv[0]);
     if (func_body) {
         int has_redirections = (node->data.command.redirection_count > 0);
         int saved_stdin = -1, saved_stdout = -1, saved_stderr = -1;
@@ -2039,7 +2039,7 @@ static int is_safe_for_vfork(ASTNode *node) {
             }
             
             // Check if it's a function (we don't analyze them, so assume unsafe)
-            if (func_get(cmd)) {
+            if (func_lookup(cmd)) {
                 return 0;
             }
             
@@ -2140,7 +2140,7 @@ static int execute_group(ASTNode *node) {
 
 static int execute_function_def(ASTNode *node) {
     ASTNode *body_copy = ast_clone_to_heap(node->data.function.body);
-    func_add(node->data.function.name, body_copy);
+    func_define(node->data.function.name, body_copy);
     return 0;
 }
 

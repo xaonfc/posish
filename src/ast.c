@@ -1,504 +1,513 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 
-
 #include "ast.h"
+#include "memalloc.h"
+
 #include <stdlib.h>
 #include <string.h>
-#include <stdio.h>
-#include "memalloc.h"
-#include "memalloc.h"
 
+/* ============================================================================
+ * Allocator Abstraction
+ * ============================================================================
+ * Unified interface for stack vs heap allocation eliminates code duplication
+ * in clone/copy operations.
+ */
 
+typedef struct {
+    void *(*alloc)(size_t size);
+    void *(*realloc_array)(void *ptr, size_t old_cnt, size_t new_cnt, size_t elem_sz);
+    char *(*strdup)(const char *s);
+} Allocator;
+
+static void *heap_realloc_array(void *ptr, size_t old_cnt, size_t new_cnt, size_t elem_sz) {
+    (void)old_cnt;
+    return xrealloc(ptr, new_cnt * elem_sz);
+}
+
+static const Allocator STACK_ALLOC = {
+    .alloc         = mem_stack_alloc,
+    .realloc_array = mem_stack_realloc_array,
+    .strdup        = mem_stack_strdup,
+};
+
+static const Allocator HEAP_ALLOC = {
+    .alloc         = xmalloc,
+    .realloc_array = heap_realloc_array,
+    .strdup        = xstrdup,
+};
+
+/* ============================================================================
+ * String Utilities
+ * ============================================================================ */
+
+static inline char *dup_str(const Allocator *a, const char *s) {
+    return s ? a->strdup(s) : NULL;
+}
+
+static char **dup_str_array(const Allocator *a, char **src, size_t count) {
+    if (!src) return NULL;
+
+    char **dst = a->alloc(sizeof(char *) * (count + 1));
+    for (size_t i = 0; i < count; i++) {
+        dst[i] = a->strdup(src[i]);
+    }
+    dst[count] = NULL;
+
+    return dst;
+}
+
+static void free_str_array(char **arr, size_t count) {
+    if (!arr) return;
+
+    for (size_t i = 0; i < count; i++) {
+        free(arr[i]);
+    }
+    free(arr);
+}
+
+/* ============================================================================
+ * Node Creation
+ * ============================================================================ */
 
 ASTNode *ast_new_command(void) {
     ASTNode *node = mem_stack_alloc(sizeof(ASTNode));
-    
-    node->type = NODE_COMMAND;
-    node->data.command.args = NULL;
-    node->data.command.arg_count = 0;
-    node->data.command.redirections = NULL;
-    node->data.command.redirection_count = 0;
-    node->data.command.assignments = NULL;
-    node->data.command.assignment_count = 0;
+
+    *node = (ASTNode){
+        .type = NODE_COMMAND,
+        .data.command = {0},
+    };
+
     return node;
-}
-
-void ast_command_add_arg(ASTNode *node, const char *arg) {
-    if (node->type != NODE_COMMAND) return;
-    
-    size_t old_count = node->data.command.arg_count;
-    node->data.command.arg_count++;
-    node->data.command.args = mem_stack_realloc_array(node->data.command.args, 
-                                      old_count, node->data.command.arg_count + 1, sizeof(char*));
-    
-    node->data.command.args[node->data.command.arg_count - 1] = mem_stack_strdup(arg);
-    node->data.command.args[node->data.command.arg_count] = NULL;
-}
-
-void ast_command_add_assignment(ASTNode *node, const char *name, const char *value) {
-    if (node->type != NODE_COMMAND) return;
-    
-    size_t old_count = node->data.command.assignment_count;
-    node->data.command.assignment_count++;
-    node->data.command.assignments = mem_stack_realloc_array(node->data.command.assignments, 
-                                             old_count, node->data.command.assignment_count, sizeof(node->data.command.assignments[0]));
-    
-    node->data.command.assignments[node->data.command.assignment_count - 1].name = mem_stack_strdup(name);
-    node->data.command.assignments[node->data.command.assignment_count - 1].value = mem_stack_strdup(value);
-}
-
-void ast_command_add_redirection(ASTNode *node, RedirectionType type, int io_number, const char *filename, const char *here_doc_content) {
-    if (node->type != NODE_COMMAND) return;
-    
-    size_t old_count = node->data.command.redirection_count;
-    node->data.command.redirection_count++; // Increment first? No, original code incremented inside index.
-    // Original: &node->data.command.redirections[node->data.command.redirection_count++]
-    
-    node->data.command.redirections = mem_stack_realloc_array(node->data.command.redirections, 
-        old_count, node->data.command.redirection_count, sizeof(Redirection));
-        
-    Redirection *r = &node->data.command.redirections[old_count];
-    r->type = type;
-    r->io_number = io_number;
-    r->filename = filename ? mem_stack_strdup(filename) : NULL;
-    r->here_doc_content = here_doc_content ? mem_stack_strdup(here_doc_content) : NULL;
 }
 
 ASTNode *ast_new_pipeline(ASTNode *left, ASTNode *right) {
     ASTNode *node = mem_stack_alloc(sizeof(ASTNode));
-    
-    node->type = NODE_PIPELINE;
-    node->data.pipeline.left = left;
-    node->data.pipeline.right = right;
+
+    *node = (ASTNode){
+        .type = NODE_PIPELINE,
+        .data.pipeline = {.left = left, .right = right},
+    };
+
     return node;
 }
 
 ASTNode *ast_new_list(ASTNode *left, ASTNode *right, int async) {
     ASTNode *node = mem_stack_alloc(sizeof(ASTNode));
-    
-    node->type = NODE_LIST;
-    node->data.list.left = left;
-    node->data.list.right = right;
-    node->data.list.async = async;
-    return node;
-}
 
-ASTNode *ast_new_if(ASTNode *condition, ASTNode *then_branch, ASTNode *else_branch) {
-    ASTNode *node = mem_stack_alloc(sizeof(ASTNode));
-    
-    node->type = NODE_IF;
-    node->data.if_stmt.condition = condition;
-    node->data.if_stmt.then_branch = then_branch;
-    node->data.if_stmt.else_branch = else_branch;
-    return node;
-}
+    *node = (ASTNode){
+        .type = NODE_LIST,
+        .data.list = {.left = left, .right = right, .async = async},
+    };
 
-ASTNode *ast_new_while(ASTNode *condition, ASTNode *body) {
-    ASTNode *node = mem_stack_alloc(sizeof(ASTNode));
-    
-    node->type = NODE_WHILE;
-    node->data.while_loop.condition = condition;
-    node->data.while_loop.body = body;
-    return node;
-}
-
-ASTNode *ast_new_until(ASTNode *condition, ASTNode *body) {
-    ASTNode *node = mem_stack_alloc(sizeof(ASTNode));
-    
-    node->type = NODE_UNTIL;
-    node->data.until_loop.condition = condition;
-    node->data.until_loop.body = body;
-    return node;
-}
-
-ASTNode *ast_new_for(const char *var_name, char **word_list, size_t word_count, ASTNode *body) {
-    ASTNode *node = mem_stack_alloc(sizeof(ASTNode));
-    
-    node->type = NODE_FOR;
-    node->data.for_loop.var_name = mem_stack_strdup(var_name);
-    // word_list is passed in. If it was allocated with malloc, we might have a problem if we don't free it.
-    // But parser allocates word_list. We need to update parser to use mem_stack for word_list too.
-    // For now, we assume word_list is already on stack or we copy it?
-    // The original code took ownership.
-    // If parser uses xrealloc for word_list, it's malloc'd.
-    // We should probably copy it to stack here if we want to be pure stack.
-    // Or update parser to use stack for word_list.
-    // Let's assume parser will be updated to use stack for word_list construction.
-    node->data.for_loop.word_list = word_list; 
-    node->data.for_loop.word_count = word_count;
-    node->data.for_loop.body = body;
-    return node;
-}
-
-ASTNode *ast_new_subshell(ASTNode *body) {
-    ASTNode *node = mem_stack_alloc(sizeof(ASTNode));
-    
-    node->type = NODE_SUBSHELL;
-    node->data.subshell.body = body;
-    return node;
-}
-
-ASTNode *ast_new_group(ASTNode *body) {
-    ASTNode *node = mem_stack_alloc(sizeof(ASTNode));
-    
-    node->type = NODE_GROUP;
-    node->data.group.body = body;
-    return node;
-}
-
-ASTNode *ast_new_function(const char *name, ASTNode *body) {
-    ASTNode *node = mem_stack_alloc(sizeof(ASTNode));
-    
-    node->type = NODE_FUNCTION;
-    node->data.function.name = mem_stack_strdup(name);
-    node->data.function.body = body;
-    return node;
-}
-
-ASTNode *ast_new_case(const char *word, CaseItem *items, size_t item_count) {
-    ASTNode *node = mem_stack_alloc(sizeof(ASTNode));
-    
-    node->type = NODE_CASE;
-    node->data.case_stmt.word = mem_stack_strdup(word);
-    node->data.case_stmt.items = items; // Assumes items allocated on stack
-    node->data.case_stmt.item_count = item_count;
     return node;
 }
 
 ASTNode *ast_new_binary(NodeType type, ASTNode *left, ASTNode *right) {
     ASTNode *node = mem_stack_alloc(sizeof(ASTNode));
-    node->type = type;
-    node->data.pipeline.left = left;
-    node->data.pipeline.right = right;
+
+    *node = (ASTNode){
+        .type = type,
+        .data.pipeline = {.left = left, .right = right},
+    };
+
     return node;
 }
 
-void ast_free(ASTNode *node) {
-    // No-op: Stack allocator handles cleanup
-    (void)node;
+ASTNode *ast_new_if(ASTNode *cond, ASTNode *then_branch, ASTNode *else_branch) {
+    ASTNode *node = mem_stack_alloc(sizeof(ASTNode));
+
+    *node = (ASTNode){
+        .type = NODE_IF,
+        .data.if_stmt = {
+            .condition   = cond,
+            .then_branch = then_branch,
+            .else_branch = else_branch,
+        },
+    };
+
+    return node;
 }
+
+ASTNode *ast_new_while(ASTNode *cond, ASTNode *body) {
+    ASTNode *node = mem_stack_alloc(sizeof(ASTNode));
+
+    *node = (ASTNode){
+        .type = NODE_WHILE,
+        .data.while_loop = {.condition = cond, .body = body},
+    };
+
+    return node;
+}
+
+ASTNode *ast_new_until(ASTNode *cond, ASTNode *body) {
+    ASTNode *node = mem_stack_alloc(sizeof(ASTNode));
+
+    *node = (ASTNode){
+        .type = NODE_UNTIL,
+        .data.until_loop = {.condition = cond, .body = body},
+    };
+
+    return node;
+}
+
+ASTNode *ast_new_for(const char *var, char **words, size_t word_cnt, ASTNode *body) {
+    ASTNode *node = mem_stack_alloc(sizeof(ASTNode));
+
+    *node = (ASTNode){
+        .type = NODE_FOR,
+        .data.for_loop = {
+            .var_name   = mem_stack_strdup(var),
+            .word_list  = words,
+            .word_count = word_cnt,
+            .body       = body,
+        },
+    };
+
+    return node;
+}
+
+ASTNode *ast_new_subshell(ASTNode *body) {
+    ASTNode *node = mem_stack_alloc(sizeof(ASTNode));
+
+    *node = (ASTNode){
+        .type = NODE_SUBSHELL,
+        .data.subshell = {.body = body},
+    };
+
+    return node;
+}
+
+ASTNode *ast_new_group(ASTNode *body) {
+    ASTNode *node = mem_stack_alloc(sizeof(ASTNode));
+
+    *node = (ASTNode){
+        .type = NODE_GROUP,
+        .data.group = {.body = body},
+    };
+
+    return node;
+}
+
+ASTNode *ast_new_function(const char *name, ASTNode *body) {
+    ASTNode *node = mem_stack_alloc(sizeof(ASTNode));
+
+    *node = (ASTNode){
+        .type = NODE_FUNCTION,
+        .data.function = {
+            .name = mem_stack_strdup(name),
+            .body = body,
+        },
+    };
+
+    return node;
+}
+
+ASTNode *ast_new_case(const char *word, CaseItem *items, size_t item_cnt) {
+    ASTNode *node = mem_stack_alloc(sizeof(ASTNode));
+
+    *node = (ASTNode){
+        .type = NODE_CASE,
+        .data.case_stmt = {
+            .word       = mem_stack_strdup(word),
+            .items      = items,
+            .item_count = item_cnt,
+        },
+    };
+
+    return node;
+}
+
+/* ============================================================================
+ * Command Node Modification
+ * ============================================================================ */
+
+void ast_command_add_arg(ASTNode *node, const char *arg) {
+    if (node->type != NODE_COMMAND) return;
+
+    CommandNode *cmd = &node->data.command;
+    size_t old = cmd->arg_count++;
+
+    cmd->args = mem_stack_realloc_array(
+        cmd->args, old, cmd->arg_count + 1, sizeof(char *)
+    );
+    cmd->args[old]     = mem_stack_strdup(arg);
+    cmd->args[old + 1] = NULL;
+}
+
+void ast_command_add_assignment(ASTNode *node, const char *name, const char *value) {
+    if (node->type != NODE_COMMAND) return;
+
+    CommandNode *cmd = &node->data.command;
+    size_t old = cmd->assignment_count++;
+
+    cmd->assignments = mem_stack_realloc_array(
+        cmd->assignments, old, cmd->assignment_count, sizeof(Assignment)
+    );
+    cmd->assignments[old] = (Assignment){
+        .name  = mem_stack_strdup(name),
+        .value = mem_stack_strdup(value),
+    };
+}
+
+void ast_command_add_redirection(ASTNode *node, RedirectionType type,
+                                  int io_num, const char *file,
+                                  const char *heredoc) {
+    if (node->type != NODE_COMMAND) return;
+
+    CommandNode *cmd = &node->data.command;
+    size_t old = cmd->redirection_count++;
+
+    cmd->redirections = mem_stack_realloc_array(
+        cmd->redirections, old, cmd->redirection_count, sizeof(Redirection)
+    );
+    cmd->redirections[old] = (Redirection){
+        .type             = type,
+        .io_number        = io_num,
+        .filename         = file    ? mem_stack_strdup(file)    : NULL,
+        .here_doc_content = heredoc ? mem_stack_strdup(heredoc) : NULL,
+    };
+}
+
+/* ============================================================================
+ * Cloning - Internal Helpers
+ * ============================================================================ */
+
+static ASTNode *clone_node(ASTNode *node, const Allocator *a);
+
+static void clone_command(CommandNode *dst, const CommandNode *src, const Allocator *a) {
+    dst->arg_count = src->arg_count;
+    dst->args      = dup_str_array(a, src->args, src->arg_count);
+
+    dst->redirection_count = src->redirection_count;
+    dst->redirections      = NULL;
+    if (src->redirections) {
+        dst->redirections = a->alloc(sizeof(Redirection) * src->redirection_count);
+        for (size_t i = 0; i < src->redirection_count; i++) {
+            const Redirection *s = &src->redirections[i];
+            dst->redirections[i] = (Redirection){
+                .type             = s->type,
+                .io_number        = s->io_number,
+                .filename         = dup_str(a, s->filename),
+                .here_doc_content = dup_str(a, s->here_doc_content),
+            };
+        }
+    }
+
+    dst->assignment_count = src->assignment_count;
+    dst->assignments      = NULL;
+    if (src->assignments) {
+        dst->assignments = a->alloc(sizeof(Assignment) * src->assignment_count);
+        for (size_t i = 0; i < src->assignment_count; i++) {
+            dst->assignments[i] = (Assignment){
+                .name  = a->strdup(src->assignments[i].name),
+                .value = a->strdup(src->assignments[i].value),
+            };
+        }
+    }
+}
+
+static void clone_case(CaseNode *dst, const CaseNode *src, const Allocator *a) {
+    dst->word       = a->strdup(src->word);
+    dst->item_count = src->item_count;
+    dst->items      = NULL;
+
+    if (!src->items) return;
+
+    dst->items = a->alloc(sizeof(CaseItem) * src->item_count);
+    for (size_t i = 0; i < src->item_count; i++) {
+        const CaseItem *si = &src->items[i];
+        CaseItem *di       = &dst->items[i];
+
+        di->patterns = NULL;
+        if (si->patterns) {
+            size_t cnt = 0;
+            while (si->patterns[cnt]) cnt++;
+            di->patterns = dup_str_array(a, si->patterns, cnt);
+        }
+        di->commands = clone_node(si->commands, a);
+    }
+}
+
+static ASTNode *clone_node(ASTNode *node, const Allocator *a) {
+    if (!node) return NULL;
+
+    ASTNode *n = a->alloc(sizeof(ASTNode));
+    n->type = node->type;
+
+    switch (node->type) {
+    case NODE_COMMAND:
+        clone_command(&n->data.command, &node->data.command, a);
+        break;
+
+    case NODE_PIPELINE:
+    case NODE_AND:
+    case NODE_OR:
+        n->data.pipeline.left  = clone_node(node->data.pipeline.left, a);
+        n->data.pipeline.right = clone_node(node->data.pipeline.right, a);
+        break;
+
+    case NODE_LIST:
+        n->data.list.left  = clone_node(node->data.list.left, a);
+        n->data.list.right = clone_node(node->data.list.right, a);
+        n->data.list.async = node->data.list.async;
+        break;
+
+    case NODE_IF:
+        n->data.if_stmt.condition   = clone_node(node->data.if_stmt.condition, a);
+        n->data.if_stmt.then_branch = clone_node(node->data.if_stmt.then_branch, a);
+        n->data.if_stmt.else_branch = clone_node(node->data.if_stmt.else_branch, a);
+        break;
+
+    case NODE_WHILE:
+        n->data.while_loop.condition = clone_node(node->data.while_loop.condition, a);
+        n->data.while_loop.body      = clone_node(node->data.while_loop.body, a);
+        break;
+
+    case NODE_UNTIL:
+        n->data.until_loop.condition = clone_node(node->data.until_loop.condition, a);
+        n->data.until_loop.body      = clone_node(node->data.until_loop.body, a);
+        break;
+
+    case NODE_FOR:
+        n->data.for_loop.var_name   = a->strdup(node->data.for_loop.var_name);
+        n->data.for_loop.word_count = node->data.for_loop.word_count;
+        n->data.for_loop.word_list  = dup_str_array(a, node->data.for_loop.word_list,
+                                                     node->data.for_loop.word_count);
+        n->data.for_loop.body       = clone_node(node->data.for_loop.body, a);
+        break;
+
+    case NODE_SUBSHELL:
+        n->data.subshell.body = clone_node(node->data.subshell.body, a);
+        break;
+
+    case NODE_GROUP:
+        n->data.group.body = clone_node(node->data.group.body, a);
+        break;
+
+    case NODE_FUNCTION:
+        n->data.function.name = a->strdup(node->data.function.name);
+        n->data.function.body = clone_node(node->data.function.body, a);
+        break;
+
+    case NODE_CASE:
+        clone_case(&n->data.case_stmt, &node->data.case_stmt, a);
+        break;
+    }
+
+    return n;
+}
+
+/* ============================================================================
+ * Cloning - Public API
+ * ============================================================================ */
 
 ASTNode *ast_copy(ASTNode *node) {
-    if (!node) return NULL;
-    
-    ASTNode *new_node = mem_stack_alloc(sizeof(ASTNode));
-    new_node->type = node->type;
-    
-    if (node->type == NODE_COMMAND) {
-        new_node->data.command.args = NULL;
-        new_node->data.command.arg_count = node->data.command.arg_count;
-        if (node->data.command.args) {
-            new_node->data.command.args = mem_stack_alloc(sizeof(char*) * (node->data.command.arg_count + 1));
-            for (size_t i = 0; i < node->data.command.arg_count; i++) {
-                new_node->data.command.args[i] = mem_stack_strdup(node->data.command.args[i]);
-            }
-            new_node->data.command.args[node->data.command.arg_count] = NULL;
-        }
-        
-        new_node->data.command.redirections = NULL;
-        new_node->data.command.redirection_count = node->data.command.redirection_count;
-        if (node->data.command.redirections) {
-            new_node->data.command.redirections = mem_stack_alloc(sizeof(Redirection) * node->data.command.redirection_count);
-            for (size_t i = 0; i < node->data.command.redirection_count; i++) {
-                new_node->data.command.redirections[i].type = node->data.command.redirections[i].type;
-                new_node->data.command.redirections[i].io_number = node->data.command.redirections[i].io_number;
-                new_node->data.command.redirections[i].filename = node->data.command.redirections[i].filename ? mem_stack_strdup(node->data.command.redirections[i].filename) : NULL;
-                new_node->data.command.redirections[i].here_doc_content = node->data.command.redirections[i].here_doc_content ? mem_stack_strdup(node->data.command.redirections[i].here_doc_content) : NULL;
-            }
-        }
-        
-        new_node->data.command.assignments = NULL;
-        new_node->data.command.assignment_count = node->data.command.assignment_count;
-        if (node->data.command.assignments) {
-            new_node->data.command.assignments = mem_stack_alloc(sizeof(node->data.command.assignments[0]) * node->data.command.assignment_count);
-            for (size_t i = 0; i < node->data.command.assignment_count; i++) {
-                new_node->data.command.assignments[i].name = mem_stack_strdup(node->data.command.assignments[i].name);
-                new_node->data.command.assignments[i].value = mem_stack_strdup(node->data.command.assignments[i].value);
-            }
-        }
-        
-    } else if (node->type == NODE_PIPELINE) {
-        new_node->data.pipeline.left = ast_copy(node->data.pipeline.left);
-        new_node->data.pipeline.right = ast_copy(node->data.pipeline.right);
-
-    } else if (node->type == NODE_LIST) {
-        new_node->data.list.left = ast_copy(node->data.list.left);
-        new_node->data.list.right = ast_copy(node->data.list.right);
-        new_node->data.list.async = node->data.list.async;
-
-    } else if (node->type == NODE_IF) {
-        new_node->data.if_stmt.condition = ast_copy(node->data.if_stmt.condition);
-        new_node->data.if_stmt.then_branch = ast_copy(node->data.if_stmt.then_branch);
-        new_node->data.if_stmt.else_branch = ast_copy(node->data.if_stmt.else_branch);
-
-    } else if (node->type == NODE_WHILE) {
-        new_node->data.while_loop.condition = ast_copy(node->data.while_loop.condition);
-        new_node->data.while_loop.body = ast_copy(node->data.while_loop.body);
-
-    } else if (node->type == NODE_UNTIL) {
-        new_node->data.until_loop.condition = ast_copy(node->data.until_loop.condition);
-        new_node->data.until_loop.body = ast_copy(node->data.until_loop.body);
-
-    } else if (node->type == NODE_FOR) {
-        new_node->data.for_loop.var_name = mem_stack_strdup(node->data.for_loop.var_name);
-        new_node->data.for_loop.word_count = node->data.for_loop.word_count;
-        new_node->data.for_loop.word_list = NULL;
-        if (node->data.for_loop.word_list) {
-            new_node->data.for_loop.word_list = mem_stack_alloc(sizeof(char*) * (node->data.for_loop.word_count + 1));
-            for (size_t i = 0; i < node->data.for_loop.word_count; i++) {
-                new_node->data.for_loop.word_list[i] = mem_stack_strdup(node->data.for_loop.word_list[i]);
-            }
-            new_node->data.for_loop.word_list[node->data.for_loop.word_count] = NULL;
-        }
-        new_node->data.for_loop.body = ast_copy(node->data.for_loop.body);
-
-    } else if (node->type == NODE_SUBSHELL) {
-        new_node->data.subshell.body = ast_copy(node->data.subshell.body);
-
-    } else if (node->type == NODE_GROUP) {
-        new_node->data.group.body = ast_copy(node->data.group.body);
-
-    } else if (node->type == NODE_FUNCTION) {
-        new_node->data.function.name = mem_stack_strdup(node->data.function.name);
-        new_node->data.function.body = ast_copy(node->data.function.body);
-
-    } else if (node->type == NODE_CASE) {
-        new_node->data.case_stmt.word = mem_stack_strdup(node->data.case_stmt.word);
-        new_node->data.case_stmt.item_count = node->data.case_stmt.item_count;
-        new_node->data.case_stmt.items = NULL;
-        if (node->data.case_stmt.items) {
-            new_node->data.case_stmt.items = mem_stack_alloc(sizeof(CaseItem) * node->data.case_stmt.item_count);
-            for (size_t i = 0; i < node->data.case_stmt.item_count; i++) {
-                new_node->data.case_stmt.items[i].patterns = NULL;
-                if (node->data.case_stmt.items[i].patterns) {
-                    size_t pat_count = 0;
-                    while (node->data.case_stmt.items[i].patterns[pat_count]) pat_count++;
-                    new_node->data.case_stmt.items[i].patterns = mem_stack_alloc(sizeof(char*) * (pat_count + 1));
-                    for (size_t j = 0; j < pat_count; j++) {
-                        new_node->data.case_stmt.items[i].patterns[j] = mem_stack_strdup(node->data.case_stmt.items[i].patterns[j]);
-                    }
-                    new_node->data.case_stmt.items[i].patterns[pat_count] = NULL;
-                }
-                new_node->data.case_stmt.items[i].commands = ast_copy(node->data.case_stmt.items[i].commands);
-            }
-        }
-
-    } else if (node->type == NODE_AND || node->type == NODE_OR) {
-        new_node->data.pipeline.left = ast_copy(node->data.pipeline.left);
-        new_node->data.pipeline.right = ast_copy(node->data.pipeline.right);
-    }
-    
-    return new_node;
-}
-
-
-void ast_free_heap(ASTNode *node) {
-    if (!node) return;
-    
-    if (node->type == NODE_COMMAND) {
-        if (node->data.command.args) {
-            for (size_t i = 0; i < node->data.command.arg_count; i++) {
-                free(node->data.command.args[i]);
-            }
-            free(node->data.command.args);
-        }
-        if (node->data.command.redirections) {
-            for (size_t i = 0; i < node->data.command.redirection_count; i++) {
-                free(node->data.command.redirections[i].filename);
-                free(node->data.command.redirections[i].here_doc_content);
-            }
-            free(node->data.command.redirections);
-        }
-        if (node->data.command.assignments) {
-            for (size_t i = 0; i < node->data.command.assignment_count; i++) {
-                free(node->data.command.assignments[i].name);
-                free(node->data.command.assignments[i].value);
-            }
-            free(node->data.command.assignments);
-        }
-        
-    } else if (node->type == NODE_PIPELINE) {
-        ast_free_heap(node->data.pipeline.left);
-        ast_free_heap(node->data.pipeline.right);
-
-    } else if (node->type == NODE_LIST) {
-        ast_free_heap(node->data.list.left);
-        ast_free_heap(node->data.list.right);
-
-    } else if (node->type == NODE_IF) {
-        ast_free_heap(node->data.if_stmt.condition);
-        ast_free_heap(node->data.if_stmt.then_branch);
-        ast_free_heap(node->data.if_stmt.else_branch);
-
-    } else if (node->type == NODE_WHILE) {
-        ast_free_heap(node->data.while_loop.condition);
-        if (node->data.while_loop.body) ast_free_heap(node->data.while_loop.body);
-
-    } else if (node->type == NODE_UNTIL) {
-        ast_free_heap(node->data.until_loop.condition);
-        if (node->data.until_loop.body) ast_free_heap(node->data.until_loop.body);
-
-    } else if (node->type == NODE_FOR) {
-        free(node->data.for_loop.var_name);
-        if (node->data.for_loop.word_list) {
-            for (size_t i = 0; i < node->data.for_loop.word_count; i++) {
-                free(node->data.for_loop.word_list[i]);
-            }
-            free(node->data.for_loop.word_list);
-        }
-        if (node->data.for_loop.body) ast_free_heap(node->data.for_loop.body);
-
-    } else if (node->type == NODE_SUBSHELL) {
-        if (node->data.subshell.body) ast_free_heap(node->data.subshell.body);
-
-    } else if (node->type == NODE_GROUP) {
-        if (node->data.group.body) ast_free_heap(node->data.group.body);
-
-    } else if (node->type == NODE_FUNCTION) {
-        free(node->data.function.name);
-        // We do NOT free the body here if it's stored in the function table?
-        // Actually, when we define a function, we usually keep the AST around.
-        // But if we free the definition node (e.g. after execution of the definition),
-        // we might want to keep the body.
-        // However, typically 'ast_free' frees the tree.
-        // The executor will need to copy/clone or take ownership.
-        // For now, let's assume ast_free frees everything.
-        if (node->data.function.body) ast_free_heap(node->data.function.body);
-
-    } else if (node->type == NODE_CASE) {
-        free(node->data.case_stmt.word);
-        if (node->data.case_stmt.items) {
-            for (size_t i = 0; i < node->data.case_stmt.item_count; i++) {
-                if (node->data.case_stmt.items[i].patterns) {
-                    for (int j = 0; node->data.case_stmt.items[i].patterns[j]; j++) {
-                        free(node->data.case_stmt.items[i].patterns[j]);
-                    }
-                    free(node->data.case_stmt.items[i].patterns);
-                }
-                if (node->data.case_stmt.items[i].commands) {
-                    ast_free_heap(node->data.case_stmt.items[i].commands);
-                }
-            }
-            free(node->data.case_stmt.items);
-        }
-
-    } else if (node->type == NODE_AND || node->type == NODE_OR) {
-        ast_free_heap(node->data.pipeline.left);
-        ast_free_heap(node->data.pipeline.right);
-    }
-    
-    free(node);
+    return clone_node(node, &STACK_ALLOC);
 }
 
 ASTNode *ast_clone_to_heap(ASTNode *node) {
-    if (!node) return NULL;
-    
-    ASTNode *new_node = xmalloc(sizeof(ASTNode));
-    new_node->type = node->type;
-    
-    if (node->type == NODE_COMMAND) {
-        new_node->data.command.args = NULL;
-        new_node->data.command.arg_count = node->data.command.arg_count;
-        if (node->data.command.args) {
-            new_node->data.command.args = xmalloc(sizeof(char*) * (node->data.command.arg_count + 1));
-            for (size_t i = 0; i < node->data.command.arg_count; i++) {
-                new_node->data.command.args[i] = xstrdup(node->data.command.args[i]);
-            }
-            new_node->data.command.args[node->data.command.arg_count] = NULL;
-        }
-        
-        new_node->data.command.redirections = NULL;
-        new_node->data.command.redirection_count = node->data.command.redirection_count;
-        if (node->data.command.redirections) {
-            new_node->data.command.redirections = xmalloc(sizeof(Redirection) * node->data.command.redirection_count);
-            for (size_t i = 0; i < node->data.command.redirection_count; i++) {
-                new_node->data.command.redirections[i].type = node->data.command.redirections[i].type;
-                new_node->data.command.redirections[i].io_number = node->data.command.redirections[i].io_number;
-                new_node->data.command.redirections[i].filename = node->data.command.redirections[i].filename ? xstrdup(node->data.command.redirections[i].filename) : NULL;
-                new_node->data.command.redirections[i].here_doc_content = node->data.command.redirections[i].here_doc_content ? xstrdup(node->data.command.redirections[i].here_doc_content) : NULL;
-            }
-        }
-        
-        new_node->data.command.assignments = NULL;
-        new_node->data.command.assignment_count = node->data.command.assignment_count;
-        if (node->data.command.assignments) {
-            new_node->data.command.assignments = xmalloc(sizeof(node->data.command.assignments[0]) * node->data.command.assignment_count);
-            for (size_t i = 0; i < node->data.command.assignment_count; i++) {
-                new_node->data.command.assignments[i].name = xstrdup(node->data.command.assignments[i].name);
-                new_node->data.command.assignments[i].value = xstrdup(node->data.command.assignments[i].value);
-            }
-        }
-        
-    } else if (node->type == NODE_PIPELINE) {
-        new_node->data.pipeline.left = ast_clone_to_heap(node->data.pipeline.left);
-        new_node->data.pipeline.right = ast_clone_to_heap(node->data.pipeline.right);
+    return clone_node(node, &HEAP_ALLOC);
+}
 
-    } else if (node->type == NODE_LIST) {
-        new_node->data.list.left = ast_clone_to_heap(node->data.list.left);
-        new_node->data.list.right = ast_clone_to_heap(node->data.list.right);
-        new_node->data.list.async = node->data.list.async;
+/* ============================================================================
+ * Memory Cleanup
+ * ============================================================================ */
 
-    } else if (node->type == NODE_IF) {
-        new_node->data.if_stmt.condition = ast_clone_to_heap(node->data.if_stmt.condition);
-        new_node->data.if_stmt.then_branch = ast_clone_to_heap(node->data.if_stmt.then_branch);
-        new_node->data.if_stmt.else_branch = ast_clone_to_heap(node->data.if_stmt.else_branch);
+void ast_free(ASTNode *node) {
+    (void)node; /* Stack allocator: arena reset handles cleanup */
+}
 
-    } else if (node->type == NODE_WHILE) {
-        new_node->data.while_loop.condition = ast_clone_to_heap(node->data.while_loop.condition);
-        new_node->data.while_loop.body = ast_clone_to_heap(node->data.while_loop.body);
+static void free_command(CommandNode *cmd) {
+    free_str_array(cmd->args, cmd->arg_count);
 
-    } else if (node->type == NODE_UNTIL) {
-        new_node->data.until_loop.condition = ast_clone_to_heap(node->data.until_loop.condition);
-        new_node->data.until_loop.body = ast_clone_to_heap(node->data.until_loop.body);
-
-    } else if (node->type == NODE_FOR) {
-        new_node->data.for_loop.var_name = xstrdup(node->data.for_loop.var_name);
-        new_node->data.for_loop.word_count = node->data.for_loop.word_count;
-        new_node->data.for_loop.word_list = NULL;
-        if (node->data.for_loop.word_list) {
-            new_node->data.for_loop.word_list = xmalloc(sizeof(char*) * (node->data.for_loop.word_count + 1));
-            for (size_t i = 0; i < node->data.for_loop.word_count; i++) {
-                new_node->data.for_loop.word_list[i] = xstrdup(node->data.for_loop.word_list[i]);
-            }
-            new_node->data.for_loop.word_list[node->data.for_loop.word_count] = NULL;
-        }
-        new_node->data.for_loop.body = ast_clone_to_heap(node->data.for_loop.body);
-
-    } else if (node->type == NODE_SUBSHELL) {
-        new_node->data.subshell.body = ast_clone_to_heap(node->data.subshell.body);
-
-    } else if (node->type == NODE_GROUP) {
-        new_node->data.group.body = ast_clone_to_heap(node->data.group.body);
-
-    } else if (node->type == NODE_FUNCTION) {
-        new_node->data.function.name = xstrdup(node->data.function.name);
-        new_node->data.function.body = ast_clone_to_heap(node->data.function.body);
-
-    } else if (node->type == NODE_CASE) {
-        new_node->data.case_stmt.word = xstrdup(node->data.case_stmt.word);
-        new_node->data.case_stmt.item_count = node->data.case_stmt.item_count;
-        new_node->data.case_stmt.items = NULL;
-        if (node->data.case_stmt.items) {
-            new_node->data.case_stmt.items = xmalloc(sizeof(CaseItem) * node->data.case_stmt.item_count);
-            for (size_t i = 0; i < node->data.case_stmt.item_count; i++) {
-                new_node->data.case_stmt.items[i].patterns = NULL;
-                if (node->data.case_stmt.items[i].patterns) {
-                    size_t pat_count = 0;
-                    while (node->data.case_stmt.items[i].patterns[pat_count]) pat_count++;
-                    new_node->data.case_stmt.items[i].patterns = xmalloc(sizeof(char*) * (pat_count + 1));
-                    for (size_t j = 0; j < pat_count; j++) {
-                        new_node->data.case_stmt.items[i].patterns[j] = xstrdup(node->data.case_stmt.items[i].patterns[j]);
-                    }
-                    new_node->data.case_stmt.items[i].patterns[pat_count] = NULL;
-                }
-                new_node->data.case_stmt.items[i].commands = ast_clone_to_heap(node->data.case_stmt.items[i].commands);
-            }
-        }
-
-    } else if (node->type == NODE_AND || node->type == NODE_OR) {
-        new_node->data.pipeline.left = ast_clone_to_heap(node->data.pipeline.left);
-        new_node->data.pipeline.right = ast_clone_to_heap(node->data.pipeline.right);
+    for (size_t i = 0; i < cmd->redirection_count; i++) {
+        free(cmd->redirections[i].filename);
+        free(cmd->redirections[i].here_doc_content);
     }
-    
-    return new_node;
+    free(cmd->redirections);
+
+    for (size_t i = 0; i < cmd->assignment_count; i++) {
+        free(cmd->assignments[i].name);
+        free(cmd->assignments[i].value);
+    }
+    free(cmd->assignments);
+}
+
+static void free_case(CaseNode *c) {
+    free(c->word);
+
+    for (size_t i = 0; i < c->item_count; i++) {
+        CaseItem *item = &c->items[i];
+        if (item->patterns) {
+            for (size_t j = 0; item->patterns[j]; j++) {
+                free(item->patterns[j]);
+            }
+            free(item->patterns);
+        }
+        ast_free_heap(item->commands);
+    }
+    free(c->items);
+}
+
+void ast_free_heap(ASTNode *node) {
+    if (!node) return;
+
+    switch (node->type) {
+    case NODE_COMMAND:
+        free_command(&node->data.command);
+        break;
+
+    case NODE_PIPELINE:
+    case NODE_AND:
+    case NODE_OR:
+        ast_free_heap(node->data.pipeline.left);
+        ast_free_heap(node->data.pipeline.right);
+        break;
+
+    case NODE_LIST:
+        ast_free_heap(node->data.list.left);
+        ast_free_heap(node->data.list.right);
+        break;
+
+    case NODE_IF:
+        ast_free_heap(node->data.if_stmt.condition);
+        ast_free_heap(node->data.if_stmt.then_branch);
+        ast_free_heap(node->data.if_stmt.else_branch);
+        break;
+
+    case NODE_WHILE:
+        ast_free_heap(node->data.while_loop.condition);
+        ast_free_heap(node->data.while_loop.body);
+        break;
+
+    case NODE_UNTIL:
+        ast_free_heap(node->data.until_loop.condition);
+        ast_free_heap(node->data.until_loop.body);
+        break;
+
+    case NODE_FOR:
+        free(node->data.for_loop.var_name);
+        free_str_array(node->data.for_loop.word_list, node->data.for_loop.word_count);
+        ast_free_heap(node->data.for_loop.body);
+        break;
+
+    case NODE_SUBSHELL:
+        ast_free_heap(node->data.subshell.body);
+        break;
+
+    case NODE_GROUP:
+        ast_free_heap(node->data.group.body);
+        break;
+
+    case NODE_FUNCTION:
+        free(node->data.function.name);
+        ast_free_heap(node->data.function.body);
+        break;
+
+    case NODE_CASE:
+        free_case(&node->data.case_stmt);
+        break;
+    }
+
+    free(node);
 }

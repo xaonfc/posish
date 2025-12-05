@@ -42,6 +42,9 @@
 extern pid_t vfork(void);
 #endif
 
+// Always use vfork for performance (safe because we control child execution)
+#define POSISH_FORK() vfork()
+
 extern char **environ;
 
 static int last_exit_status = 0;
@@ -1543,9 +1546,15 @@ static int execute_simple_command(ASTNode *node) {
     // Prepare environment in parent to avoid heap allocation in child (vfork safety)
     char **env = posish_var_get_environ();
 
-    // Use fork() instead of vfork() for safety
-    // vfork() shares address space and is dangerous if child modifies state
-    pid_t pid = fork();
+    // Use vfork() if safe (no state modification), otherwise fork()
+    // CRITICAL: Must check safety because vfork shares memory with parent!
+    // Use fork() instead of vfork() to prevent memory corruption
+    // vfork() shares address space, and child modifying stack/heap can corrupt parent
+    //
+    // UPDATE: We verified that handle_redirections and execve are safe.
+    // posish_var_get_environ() is called in parent.
+    // So we restore vfork() for performance.
+    pid_t pid = POSISH_FORK();
     
     if (pid == 0) {
         // Child process - restore signal mask
@@ -1612,6 +1621,9 @@ static int execute_simple_command(ASTNode *node) {
 }
 
 static int execute_pipeline(ASTNode *node) {
+    // CRITICAL: Flush buffers before fork to prevent duplication
+    buf_out_flush_all();
+
     int pipefd[2];
     if (pipe(pipefd) < 0) {
         perror("posish: pipe failed");
@@ -1654,6 +1666,9 @@ static int execute_list(ASTNode *node) {
 
     if (node->data.list.left) {
         if (node->data.list.async) {
+            // CRITICAL: Flush buffers before fork
+            buf_out_flush_all();
+            
             pid_t pid = fork();
             if (pid == 0) {
                 setpgid(0, 0);

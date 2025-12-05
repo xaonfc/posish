@@ -13,6 +13,7 @@
 extern int func_return_status;
 extern int executor_break_count;
 extern int executor_continue_count;
+extern int executor_no_fork;
 
 int executor_execute(struct ASTNode *node);
 int executor_get_last_status(void);

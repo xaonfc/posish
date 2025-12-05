@@ -51,6 +51,7 @@ static int last_exit_status = 0;
 int func_return_status = 0;
 int executor_break_count = 0;
 int executor_continue_count = 0;
+int executor_no_fork = 0;
 
 #include "signals.h"
 
@@ -267,6 +268,76 @@ static char *execute_subshell_capture(const char *cmd_str) {
         }
     }
     
+    // OPTIMIZATION: In-Process Capture
+    // If the command is safe to run in the parent process (because it forks its own children),
+    // we can avoid the extra fork for the capture process.
+    // Safe nodes:
+    // - NODE_PIPELINE: Always forks children.
+    // - NODE_COMMAND (External): Forks child (unless NO_FORK, but we are parent here).
+    // - NODE_SUBSHELL: Forks child.
+    // Unsafe:
+    // - NODE_COMMAND (Builtin): Might modify parent state (cd, exit, etc).
+    
+    int can_run_in_process = 0;
+    if (node->type == NODE_PIPELINE || node->type == NODE_SUBSHELL) {
+        can_run_in_process = 1;
+    } else if (node->type == NODE_COMMAND) {
+        // Check if external
+        if (!builtin_is_builtin(node->data.command.args[0])) {
+            can_run_in_process = 1;
+        }
+    }
+
+    if (can_run_in_process) {
+        int pipefd[2];
+        if (pipe(pipefd) < 0) {
+            error_sys("pipe");
+            return mem_stack_strdup("");
+        }
+
+        // Flush buffers before redirecting stdout
+        buf_out_flush_all();
+
+        int saved_stdout = dup(STDOUT_FILENO);
+        if (dup2(pipefd[1], STDOUT_FILENO) < 0) {
+            perror("dup2");
+            close(pipefd[0]);
+            close(pipefd[1]);
+            close(saved_stdout);
+            return mem_stack_strdup("");
+        }
+        close(pipefd[1]);
+
+        // Execute directly
+        int status = executor_execute(node);
+        (void)status; // We don't use exit status for capture usually
+
+        // Restore stdout
+        buf_out_flush_all(); // Flush output to pipe
+        dup2(saved_stdout, STDOUT_FILENO);
+        close(saved_stdout);
+
+        // Read output
+        size_t size = 0;
+        size_t capacity = 128;
+        char *buffer = mem_stack_alloc(capacity);
+        
+        ssize_t n;
+        while ((n = read(pipefd[0], buffer + size, capacity - size - 1)) > 0) {
+            size += n;
+            if (size >= capacity - 1) {
+                size_t new_capacity = capacity * 2;
+                buffer = mem_stack_realloc_array(buffer, capacity, new_capacity, 1);
+                capacity = new_capacity;
+            }
+        }
+        close(pipefd[0]);
+        buffer[size] = '\0';
+        
+        // ast_free(node); // No-op
+        return buffer;
+    }
+
     slow_path:;
     // Slow path: fork required
     int pipefd[2];
@@ -289,6 +360,7 @@ static char *execute_subshell_capture(const char *cmd_str) {
         dup2(pipefd[1], STDOUT_FILENO);
         close(pipefd[1]);
         
+        executor_no_fork = 1; // Optimize: exec directly
         int status = executor_execute(node);
         // CRITICAL: Flush buffered output before _exit() so it goes to pipe
         buf_out_flush_all();
@@ -1554,7 +1626,16 @@ static int execute_simple_command(ASTNode *node) {
     // UPDATE: We verified that handle_redirections and execve are safe.
     // posish_var_get_environ() is called in parent.
     // So we restore vfork() for performance.
-    pid_t pid = POSISH_FORK();
+    pid_t pid;
+    
+    if (executor_no_fork) {
+        // OPTIMIZATION: We are already in a child process dedicated to this command.
+        // Skip fork and exec directly.
+        // fprintf(stderr, "DEBUG: NO_FORK optimization triggered for %s\n", argv[0]);
+        pid = 0;
+    } else {
+        pid = POSISH_FORK();
+    }
     
     if (pid == 0) {
         // Child process - restore signal mask
@@ -1635,6 +1716,7 @@ static int execute_pipeline(ASTNode *node) {
         close(pipefd[0]);
         dup2(pipefd[1], STDOUT_FILENO);
         close(pipefd[1]);
+        executor_no_fork = 1; // Optimize: exec directly
         exit(executor_execute(node->data.pipeline.left));
     }
 
@@ -1643,6 +1725,7 @@ static int execute_pipeline(ASTNode *node) {
         close(pipefd[1]);
         dup2(pipefd[0], STDIN_FILENO);
         close(pipefd[0]);
+        executor_no_fork = 1; // Optimize: exec directly
         exit(executor_execute(node->data.pipeline.right));
     }
 
@@ -1672,6 +1755,7 @@ static int execute_list(ASTNode *node) {
             pid_t pid = fork();
             if (pid == 0) {
                 setpgid(0, 0);
+                executor_no_fork = 1; // Optimize: exec directly
                 exit(executor_execute(node->data.list.left));
             } else if (pid < 0) {
                 perror("posish: fork failed");
@@ -1997,6 +2081,7 @@ static int execute_subshell(ASTNode *node) {
     
     if (pid == 0) {
         // Child process
+        executor_no_fork = 1; // Optimize: exec directly
         int status = executor_execute(node->data.subshell.body);
         exit(status);  // Use exit() (or _exit)
     } else if (pid > 0) {

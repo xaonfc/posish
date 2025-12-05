@@ -8,6 +8,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <string.h>
+#include <limits.h>
 
 int handle_redirections(Redirection *redirs, size_t count) {
     for (size_t i = 0; i < count; i++) {
@@ -84,27 +85,58 @@ int handle_redirections(Redirection *redirs, size_t count) {
             }
             close(fd);
         } else if (r->type == REDIR_HEREDOC || r->type == REDIR_HEREDOC_DASH) {
-            char template[] = "/tmp/posish_heredoc_XXXXXX";
-            fd = mkstemp(template);
-            if (fd < 0) {
-                error_sys("mkstemp");
-                return 1;
-            }
-            unlink(template);
+            // OPTIMIZATION: Use pipe for small heredocs to avoid disk I/O
+            // PIPE_BUF is usually 4096 bytes on Linux
+            size_t len = r->here_doc_content ? strlen(r->here_doc_content) : 0;
             
-            if (r->here_doc_content) {
-                if (write(fd, r->here_doc_content, strlen(r->here_doc_content)) < 0) {
-                    // Ignore write error for now, but at least check it to satisfy compiler
+            #ifndef PIPE_BUF
+            #define PIPE_BUF 4096
+            #endif
+
+            if (len <= PIPE_BUF) {
+                int pipefd[2];
+                if (pipe(pipefd) < 0) {
+                    perror("posish: pipe failed for heredoc");
+                    return 1;
                 }
-            }
-            lseek(fd, 0, SEEK_SET);
-            
-            if (dup2(fd, r->io_number) < 0) {
-                error_sys("dup2");
+                
+                if (len > 0) {
+                    if (write(pipefd[1], r->here_doc_content, len) < 0) {
+                        // Ignore write error
+                    }
+                }
+                close(pipefd[1]); // Close write end
+                
+                if (dup2(pipefd[0], r->io_number) < 0) { // Use requested FD (default 0)
+                     perror("posish: dup2 failed");
+                     close(pipefd[0]);
+                     return 1;
+                }
+                close(pipefd[0]);
+            } else {
+                // Fallback to mkstemp for large heredocs
+                char template[] = "/tmp/posish_heredoc_XXXXXX";
+                int fd = mkstemp(template);
+                if (fd < 0) {
+                    perror("posish: mkstemp failed");
+                    return 1;
+                }
+                unlink(template); // Delete file immediately, it stays open
+
+                if (r->here_doc_content) {
+                    if (write(fd, r->here_doc_content, len) < 0) {
+                        // Ignore write error for now, but at least check it to satisfy compiler
+                    }
+                }
+                lseek(fd, 0, SEEK_SET); // Rewind
+
+                if (dup2(fd, r->io_number) < 0) {
+                    perror("posish: dup2 failed");
+                    close(fd);
+                    return 1;
+                }
                 close(fd);
-                return 1;
             }
-            close(fd);
         }
     }
     return 0;

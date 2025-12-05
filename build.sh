@@ -54,9 +54,12 @@ Commands:
   clean          : Clean build artifacts (ninja clean + temp dirs)
   wipe           : Remove build directory completely
   wipeall        : Remove ALL build directories (Linux, FreeBSD, QNX, etc.)
-  deb            : Build Debian package (.deb)
+  deb            : Build Debian package (.deb) [SIGN=1 to sign]
   test           : Run test suite (pytest)
   asan           : Build with AddressSanitizer
+
+Version:
+  version=X.Y.Z  : Update version in meson.build and debian/changelog
 
 Cross-compilation:
   target=<os>    : Build for a specific OS
@@ -130,7 +133,11 @@ case "$1" in
         rm -f debian/changelog.dch
         dch -v "${VERSION}-1" --distribution unstable "Build version ${VERSION}"
 
-        dpkg-buildpackage -us -uc
+        if [ -n "$SIGN" ]; then
+            dpkg-buildpackage  # Signs with GPG key
+        else
+            dpkg-buildpackage -us -uc  # Unsigned
+        fi
 
         mv ../posish_*.deb       . 2>/dev/null || true
         mv ../posish_*.changes   . 2>/dev/null || true
@@ -142,6 +149,24 @@ case "$1" in
         echo
         echo "Package build complete."
         ls -1 posish_*.deb
+        exit 0
+        ;;
+    version=*|--version=*)
+        NEW_VERSION=${1#*=}
+        echo "==> Updating version to $NEW_VERSION..."
+
+        # Update meson.build
+        sed -i "s/version : '[^']*'/version : '$NEW_VERSION'/" meson.build
+        echo "Updated meson.build"
+
+        # Update debian/changelog
+        need_cmd dch "Please install 'devscripts'."
+        dch -v "${NEW_VERSION}-1" --distribution unstable "Release $NEW_VERSION"
+        echo "Updated debian/changelog"
+
+        echo
+        echo "Version updated to $NEW_VERSION"
+        echo "Don't forget to: git add meson.build debian/changelog && git commit"
         exit 0
         ;;
     test)

@@ -1,3 +1,13 @@
+posish (0.0.2-1) unstable; urgency=medium
+
+  * Release 0.0.2  * Fix signal handling and trap execution * Refactor
+    AST module with Allocator abstraction * Refactor functions module
+    with cleaner API * Refactor build.sh with new targets (Linux,
+    FreeBSD, QNX) * Add wipeall command to build.sh * Various code
+    cleanups and duplicate removal
+
+ -- xaonfc <xaonfc@linuxmail.org>  Fri, 05 Dec 2025 20:52:31 +0200
+
 posish (0.0.1-1) unstable; urgency=medium
 
   * Build version 0.0.1

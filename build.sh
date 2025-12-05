@@ -1,26 +1,78 @@
 #!/bin/sh
 set -e
 
-# Use OS-specific build directory to support shared folders (NFS/VirtualBox)
 OS_NAME=$(uname -s)
-BUILD_DIR="build_${OS_NAME}"
+LOCAL_BUILD_DIR="build_${OS_NAME}"
+BUILD_DIR=$LOCAL_BUILD_DIR
 
-# Check dependencies
-if ! command -v meson >/dev/null 2>&1; then
-    echo "Error: meson is not installed in your system."
-    echo "Please install it via your package manager"
+die() {
+    echo "Error: $*" >&2
     exit 1
-fi
+}
 
-if ! command -v ninja >/dev/null 2>&1; then
-    echo "Error: ninja is not installed in your system."
-    echo "Please install it via your package manager"
-    exit 1
-fi
+need_cmd() {
+    cmd=$1
+    shift
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+        if [ "$#" -gt 0 ]; then
+            die "$cmd not found. $*"
+        else
+            die "$cmd not found in PATH."
+        fi
+    fi
+}
 
-# Handle arguments
+# For simple one-off builds (no /tmp fallback)
+simple_build() {
+    dir=$1
+    shift
+    if [ ! -d "$dir" ]; then
+        meson setup "$dir" . "$@"
+    fi
+    ninja -C "$dir"
+    echo
+    echo "Binary location: $dir/posish"
+}
+
+# For default build with /tmp fallback
+setup_build() {
+    dir=$1
+    shift
+    # Clean if exists but broken (missing build.ninja)
+    if [ -d "$dir" ] && [ ! -f "$dir/build.ninja" ]; then
+        rm -rf "$dir"
+    fi
+    meson setup "$dir" . "$@"
+}
+
+usage() {
+    cat <<EOF
+Usage: $0 [command]
+
+Commands:
+  (no args)      : Build the project for current platform
+  clean          : Clean build artifacts (ninja clean + temp dirs)
+  wipe           : Remove build directory completely
+  wipeall        : Remove ALL build directories (Linux, FreeBSD, QNX, etc.)
+  deb            : Build Debian package (.deb)
+  test           : Run test suite (pytest)
+  asan           : Build with AddressSanitizer
+
+Cross-compilation:
+  target=<os>    : Build for a specific OS
+    target=linux   : Linux (native build)
+    target=freebsd : FreeBSD (cross-compile)
+    target=qnx     : QNX Neutrino (requires QNX SDP)
+
+  arch=<arch>    : Cross-compile for a different architecture (Linux)
+    arch=aarch64 : ARM64 Linux (requires gcc-aarch64-linux-gnu)
+EOF
+}
+
 case "$1" in
     clean)
+        need_cmd ninja "Please install it via your package manager."
+
         # Clean local build dir
         if [ -f "$BUILD_DIR/build.ninja" ]; then
             echo "==> Cleaning artifacts..."
@@ -36,18 +88,18 @@ case "$1" in
         USER_ID=$(id -u)
         TMP_BUILD="/tmp/posish_build_${OS_NAME}_${USER_ID}"
         if [ -d "$TMP_BUILD" ]; then
-             echo "==> Cleaning fallback build directory ($TMP_BUILD)..."
-             if [ -f "$TMP_BUILD/build.ninja" ]; then
-                 ninja -C "$TMP_BUILD" clean
-             else
-                 rm -rf "$TMP_BUILD"
-             fi
+            echo "==> Cleaning fallback build directory ($TMP_BUILD)..."
+            if [ -f "$TMP_BUILD/build.ninja" ]; then
+                ninja -C "$TMP_BUILD" clean
+            else
+                rm -rf "$TMP_BUILD"
+            fi
         fi
-        
+
         # Clean Debian build artifacts
         if [ -d "obj-x86_64-linux-gnu" ]; then
-             echo "==> Cleaning Debian build artifacts..."
-             rm -rf obj-*
+            echo "==> Cleaning Debian build artifacts..."
+            rm -rf obj-*
         fi
         exit 0
         ;;
@@ -57,70 +109,63 @@ case "$1" in
         rm -rf obj-*
         exit 0
         ;;
+    wipeall)
+        echo "==> Removing ALL build directories..."
+        rm -rf build_Linux build_FreeBSD build_qnx build_freebsd build_ASAN build_aarch64
+        rm -rf obj-*
+        # Clean /tmp fallback dirs
+        rm -rf /tmp/posish_build_*
+        echo "All build directories removed."
+        exit 0
+        ;;
     deb)
         echo "==> Building Debian package..."
-        
-        # Check dependencies
-        if ! command -v dch >/dev/null 2>&1; then
-            echo "Error: 'dch' not found. Please install 'devscripts'."
-            exit 1
-        fi
-        if ! command -v dpkg-buildpackage >/dev/null 2>&1; then
-            echo "Error: 'dpkg-buildpackage' not found. Please install 'dpkg-dev'."
-            exit 1
-        fi
 
-        # Extract version from meson.build
+        need_cmd dch "Please install 'devscripts'."
+        need_cmd dpkg-buildpackage "Please install 'dpkg-dev'."
+
         VERSION=$(grep "version :" meson.build | cut -d "'" -f 2)
         echo "Detected version: $VERSION"
 
-        # Update changelog
         rm -f debian/changelog.dch
         dch -v "${VERSION}-1" --distribution unstable "Build version ${VERSION}"
 
-        # Build package
         dpkg-buildpackage -us -uc
 
-        # Move artifacts
-        mv ../posish_*.deb . 2>/dev/null || true
-        mv ../posish_*.changes . 2>/dev/null || true
+        mv ../posish_*.deb       . 2>/dev/null || true
+        mv ../posish_*.changes   . 2>/dev/null || true
         mv ../posish_*.buildinfo . 2>/dev/null || true
-        mv ../posish_*.dsc . 2>/dev/null || true
-        mv ../posish_*.tar.xz . 2>/dev/null || true
+        mv ../posish_*.dsc       . 2>/dev/null || true
+        mv ../posish_*.tar.xz    . 2>/dev/null || true
         mv ../posish-dbgsym_*.ddeb . 2>/dev/null || true
 
-        echo ""
+        echo
         echo "Package build complete."
         ls -1 posish_*.deb
         exit 0
         ;;
     test)
         echo "==> Running tests..."
-        if ! command -v pytest >/dev/null 2>&1; then
-            echo "Error: pytest not found. Please install python3-pytest."
-            exit 1
-        fi
+        need_cmd pytest "Please install python3-pytest."
         pytest tests/
         exit 0
         ;;
     asan)
         echo "==> Building with AddressSanitizer..."
-        BUILD_DIR="build_ASAN"
-        if [ ! -d "$BUILD_DIR" ]; then
-            meson setup "$BUILD_DIR" . -Db_sanitize=address -Dbuildtype=debug
-        fi
-        ninja -C "$BUILD_DIR"
-        echo "Binary location: $BUILD_DIR/posish"
+        need_cmd meson "Please install it via your package manager."
+        need_cmd ninja "Please install it via your package manager."
+        simple_build "build_ASAN" -Db_sanitize=address -Dbuildtype=debug
         exit 0
         ;;
     target=*|--target=*)
-        # Cross-compilation for different operating systems
-        TARGET=$(echo "$1" | cut -d= -f2)
+        TARGET=${1#*=}
+        need_cmd meson "Please install it via your package manager."
+        need_cmd ninja "Please install it via your package manager."
+
         case "$TARGET" in
             qnx)
                 echo "==> Cross-compiling for QNX..."
-                
-                # Check QNX SDP environment
+
                 if [ -z "$QNX_HOST" ]; then
                     if [ -f "$HOME/qnx800/qnxsdp-env.sh" ]; then
                         echo "Sourcing QNX SDP environment..."
@@ -128,29 +173,19 @@ case "$1" in
                     elif [ -f "$HOME/qnx710/qnxsdp-env.sh" ]; then
                         . "$HOME/qnx710/qnxsdp-env.sh"
                     else
-                        echo "Error: QNX SDP environment not found."
-                        echo "Please source qnxsdp-env.sh first or install QNX SDP."
-                        exit 1
+                        die "QNX SDP environment not found. Please source qnxsdp-env.sh first."
                     fi
                 fi
-                
-                # Verify QNX environment variables
+
                 if [ -z "$QNX_HOST" ] || [ -z "$QNX_TARGET" ]; then
-                    echo "Error: QNX_HOST or QNX_TARGET not set."
-                    echo "Please source qnxsdp-env.sh from your QNX SDP installation."
-                    exit 1
+                    die "QNX_HOST or QNX_TARGET not set. Please source qnxsdp-env.sh."
                 fi
-                
-                # Check for cross-compiler
+
                 QNX_GCC="$QNX_HOST/usr/bin/ntox86_64-gcc"
-                if [ ! -x "$QNX_GCC" ]; then
-                    echo "Error: QNX cross-compiler not found at $QNX_GCC"
-                    exit 1
-                fi
-                
-                # Generate cross-file dynamically
+                [ -x "$QNX_GCC" ] || die "QNX cross-compiler not found at $QNX_GCC"
+
                 echo "Generating qnx-x86_64.txt cross-file..."
-                cat > qnx-x86_64.txt << EOF
+                cat > qnx-x86_64.txt <<EOF
 [binaries]
 c = '$QNX_HOST/usr/bin/ntox86_64-gcc'
 cpp = '$QNX_HOST/usr/bin/ntox86_64-g++'
@@ -169,42 +204,69 @@ cpu_family = 'x86_64'
 cpu = 'x86_64'
 endian = 'little'
 EOF
-                
-                BUILD_DIR="build_qnx"
-                if [ ! -d "$BUILD_DIR" ]; then
-                    meson setup "$BUILD_DIR" . --cross-file qnx-x86_64.txt
-                fi
-                ninja -C "$BUILD_DIR"
-                echo ""
+                simple_build "build_qnx" --cross-file qnx-x86_64.txt
                 echo "QNX build complete."
-                echo "Binary location: $BUILD_DIR/posish"
+                exit 0
+                ;;
+            freebsd)
+                echo "==> Cross-compiling for FreeBSD..."
+
+                if command -v x86_64-unknown-freebsd14.0-gcc >/dev/null 2>&1; then
+                    FREEBSD_CC="x86_64-unknown-freebsd14.0-gcc"
+                    FREEBSD_AR="x86_64-unknown-freebsd14.0-ar"
+                    FREEBSD_STRIP="x86_64-unknown-freebsd14.0-strip"
+                else
+                    need_cmd clang "Install clang or a FreeBSD cross-compiler."
+                    FREEBSD_CC="clang --target=x86_64-unknown-freebsd14 --sysroot=/usr/freebsd"
+                    FREEBSD_AR="llvm-ar"
+                    FREEBSD_STRIP="llvm-strip"
+                fi
+
+                echo "Creating freebsd-x86_64.txt cross-file..."
+                cat > freebsd-x86_64.txt <<EOF
+[binaries]
+c = '$FREEBSD_CC'
+ar = '$FREEBSD_AR'
+strip = '$FREEBSD_STRIP'
+
+[host_machine]
+system = 'freebsd'
+cpu_family = 'x86_64'
+cpu = 'x86_64'
+endian = 'little'
+EOF
+                simple_build "build_freebsd" --cross-file freebsd-x86_64.txt
+                echo "FreeBSD build complete."
+                exit 0
+                ;;
+            linux)
+                echo "==> Building for Linux (native)..."
+                simple_build "build_Linux" --buildtype=release
+                echo "Linux build complete."
                 exit 0
                 ;;
             *)
                 echo "Error: Unknown target OS '$TARGET'"
-                echo "Available targets: qnx"
+                echo "Available targets: linux, freebsd, qnx"
                 exit 1
                 ;;
         esac
         ;;
     arch=*|--arch=*)
-        # Cross-compilation for different architectures (Linux)
-        ARCH=$(echo "$1" | cut -d= -f2)
+        ARCH=${1#*=}
+        need_cmd meson "Please install it via your package manager."
+        need_cmd ninja "Please install it via your package manager."
+
         case "$ARCH" in
             aarch64|arm64)
                 echo "==> Cross-compiling for AArch64 (ARM64) Linux..."
-                
-                # Check for cross-compiler
-                if ! command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then
-                    echo "Error: aarch64-linux-gnu-gcc not found."
-                    echo "Install with: sudo apt install gcc-aarch64-linux-gnu"
-                    exit 1
-                fi
-                
-                # Create cross-file if it doesn't exist
+
+                need_cmd aarch64-linux-gnu-gcc \
+                    "Install with: sudo apt install gcc-aarch64-linux-gnu"
+
                 if [ ! -f "aarch64-linux.txt" ]; then
                     echo "Creating aarch64-linux.txt cross-file..."
-                    cat > aarch64-linux.txt << 'EOF'
+                    cat > aarch64-linux.txt <<'EOF'
 [binaries]
 c = 'aarch64-linux-gnu-gcc'
 cpp = 'aarch64-linux-gnu-g++'
@@ -218,15 +280,9 @@ cpu = 'aarch64'
 endian = 'little'
 EOF
                 fi
-                
-                BUILD_DIR="build_aarch64"
-                if [ ! -d "$BUILD_DIR" ]; then
-                    meson setup "$BUILD_DIR" . --cross-file aarch64-linux.txt
-                fi
-                ninja -C "$BUILD_DIR"
-                echo ""
+
+                simple_build "build_aarch64" --cross-file aarch64-linux.txt
                 echo "AArch64 Linux build complete."
-                echo "Binary location: $BUILD_DIR/posish"
                 exit 0
                 ;;
             *)
@@ -237,66 +293,30 @@ EOF
         esac
         ;;
     help|--help|-h)
-        echo "Usage: $0 [command]"
-        echo ""
-        echo "Commands:"
-        echo "  (no args)      : Build the project for current platform"
-        echo "  clean          : Clean build artifacts (ninja clean)"
-        echo "  wipe           : Remove build directory completely"
-        echo "  deb            : Build Debian package (.deb)"
-        echo "  test           : Run test suite (pytest)"
-        echo "  asan           : Build with AddressSanitizer"
-        echo ""
-        echo "Cross-compilation:"
-        echo "  target=<os>    : Cross-compile for a different OS"
-        echo "    target=qnx   : QNX Neutrino (requires QNX SDP)"
-        echo ""
-        echo "  arch=<arch>    : Cross-compile for a different architecture (Linux)"
-        echo "    arch=aarch64 : ARM64 Linux (requires gcc-aarch64-linux-gnu)"
+        usage
         exit 0
         ;;
 esac
 
-# Function to attempt build setup
-setup_build() {
-    TARGET_DIR=$1
-    echo "==> Setting up build directory in $TARGET_DIR..."
-    
-    # Clean if exists but broken (missing build.ninja)
-    if [ -d "$TARGET_DIR" ] && [ ! -f "$TARGET_DIR/build.ninja" ]; then
-         rm -rf "$TARGET_DIR"
-    fi
+# Default: native build with /tmp fallback
+need_cmd meson "Please install it via your package manager."
+need_cmd ninja "Please install it via your package manager."
 
-    if meson setup "$TARGET_DIR" . --buildtype=release; then
-        return 0
-    else
-        return 1
-    fi
-}
-
-# Try standard build dir first
-if ! setup_build "$BUILD_DIR"; then
+if ! setup_build "$BUILD_DIR" --buildtype=release; then
     echo "Warning: Failed to setup build in $BUILD_DIR."
     echo "Attempting fallback to /tmp (useful for NFS/Shared Folders)..."
-    
-    # Use a unique temp directory based on user ID to avoid permission issues
+
     USER_ID=$(id -u)
     BUILD_DIR="/tmp/posish_build_${OS_NAME}_${USER_ID}"
-    
-    if ! setup_build "$BUILD_DIR"; then
-        echo ""
-        echo "Error: Meson setup failed even in /tmp."
-        echo "Please check your Meson installation and permissions."
-        exit 1
+
+    if ! setup_build "$BUILD_DIR" --buildtype=release; then
+        echo
+        die "Meson setup failed even in /tmp. Please check your Meson installation and permissions."
     fi
 fi
 
-# Build
 echo "==> Building..."
 ninja -C "$BUILD_DIR"
-
-# Copy binary to OS-specific build directory if we used a fallback
-LOCAL_BUILD_DIR="build_${OS_NAME}"
 
 if [ "$BUILD_DIR" != "$LOCAL_BUILD_DIR" ]; then
     mkdir -p "$LOCAL_BUILD_DIR"
@@ -310,6 +330,6 @@ if [ -d "build" ]; then
     rm -rf "build"
 fi
 
-echo ""
+echo
 echo "Build complete."
 echo "Binary location: $LOCAL_BUILD_DIR/posish"

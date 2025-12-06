@@ -24,6 +24,9 @@ int signal_trap(int signum, const char *command);
 // Reset a signal to its default behavior
 int signal_reset(int signum);
 
+// Reset all signals (e.g. in child process)
+void signal_reset_all(void);
+
 // Ignore a signal
 int signal_ignore(int signum);
 

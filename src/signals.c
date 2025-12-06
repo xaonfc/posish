@@ -210,6 +210,18 @@ int signal_reset(int signum) {
     return 0;
 }
 
+void signal_reset_all(void) {
+    for (int i = 1; i < MAX_SIGNALS; i++) {
+        if (trap_commands[i]) {
+            if (signals_ignored_on_entry[i]) {
+                signal_ignore(i);
+            } else {
+                signal_reset(i);
+            }
+        }
+    }
+}
+
 int signal_ignore(int signum) {
     return signal_trap(signum, "");
 }

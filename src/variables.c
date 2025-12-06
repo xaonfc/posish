@@ -456,24 +456,45 @@ void posish_var_declare_local(const char *name, const char *value) {
 // Positional parameters implementation (unchanged)
 static char **positional_args = NULL;
 static int positional_count = 0;
+static size_t positional_capacity = 0;
 
 void posish_var_set_positional(int argc, char **argv) {
-    if (positional_args) {
-        for (int i = 0; i < positional_count; i++) {
-            free(positional_args[i]);
+    if (argc > positional_capacity || !positional_args) {
+        // Reallocate
+        if (positional_args) {
+           for (int i = 0; i < positional_capacity; i++) {
+               if (positional_args[i]) free(positional_args[i]);
+           }
+           free(positional_args);
         }
-        free(positional_args);
+        positional_capacity = (argc < 4) ? 4 : argc;
+        positional_args = xmalloc(sizeof(char *) * positional_capacity);
+        for (int i = 0; i < positional_capacity; i++) positional_args[i] = NULL;
     }
     
-    positional_count = argc;
-    if (argc > 0) {
-        positional_args = xmalloc(sizeof(char *) * argc);
-        for (int i = 0; i < argc; i++) {
-            positional_args[i] = xstrdup(argv[i]);
+    // Set new values, reusing buffers if possible
+    for (int i = 0; i < argc; i++) {
+        const char *new_val = argv[i];
+        if (positional_args[i]) {
+            size_t new_len = strlen(new_val);
+            size_t old_len = strlen(positional_args[i]);
+            if (new_len <= old_len) {
+                strcpy(positional_args[i], new_val);
+            } else {
+                free(positional_args[i]);
+                positional_args[i] = xstrdup(new_val);
+            }
+        } else {
+            positional_args[i] = xstrdup(new_val);
         }
-    } else {
-        positional_args = NULL;
     }
+    
+    // Clear/Free remaining slots if we shrank? 
+    // Actually we only track count. But we should free contents of unused slots to save memory?
+    // Or keep them for reuse?
+    // Let's keep them if they are allocated, but we rely on count.
+    
+    positional_count = argc;
 }
 
 int posish_var_shift_positional(int n) {

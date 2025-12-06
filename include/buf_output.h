@@ -30,6 +30,13 @@ void buf_out_flush(struct buf_out *buf);
 // Flush all registered buffers (e.g. stdout)
 void buf_out_flush_all(void);
 
+// Reset a specific buffer (clear content without flushing)
+// Useful for child processes after fork to avoid duplicate output
+void buf_out_reset(struct buf_out *buf);
+
+// Reset all registered buffers
+void buf_out_reset_all(void);
+
 // Slow path for character output (when buffer is full)
 void buf_out_putc_slow(int c, struct buf_out *buf);
 

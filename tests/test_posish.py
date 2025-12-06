@@ -542,3 +542,39 @@ def test_long_command_line():
 def test_special_chars_in_strings():
     assert run_posish("echo 'test!@#$%^&*()'")[0] == "test!@#$%^&*()"
     assert run_posish('echo "test<>\u003e|"')[0] == "test<>\u003e|"
+
+# ============================================================================
+# CATEGORY: Regression Tests (Recent Fixes)
+# ============================================================================
+
+def test_regression_buffered_output_duplication():
+    # Test for the bug where buffered output was duplicated in child processes
+    # causing arithmetic expansion pipelines to output double or fail.
+    # This specifically targets the fix involving buf_out_reset_all() on fork.
+    
+    # Arithmetic expansion uses pipelines internally in some paths? 
+    # Or purely echo | cat scenarios.
+    
+    # Case 1: Arithmetic pipeline
+    assert run_posish("echo $((1+1)) | cat")[0] == "2"
+    
+    # Case 2: Simple pipeline with potentially buffered output
+    assert run_posish("echo 153 | cut -b 1-3")[0] == "153"
+    
+    # Case 3: Multiple echos
+    assert run_posish("echo a; echo b | cat")[0] == "a\nb"
+
+def test_regression_positional_set_optimization():
+    # Verify set -- optimization (reusing buffers) doesn't corrupt data
+    script = """
+    set -- start
+    echo $1
+    set -- changed
+    echo $1
+    set -- longer_string
+    echo $1
+    set -- s
+    echo $1
+    """
+    expected = "start\nchanged\nlonger_string\ns"
+    assert run_posish(script)[0] == expected

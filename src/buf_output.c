@@ -60,6 +60,16 @@ void buf_out_flush_all(void) {
     buf_out_flush(&buf_stdout);
 }
 
+void buf_out_reset(struct buf_out *buf) {
+    if (buf->start) {
+        buf->next = buf->start;
+    }
+}
+
+void buf_out_reset_all(void) {
+    buf_out_reset(&buf_stdout);
+}
+
 void buf_out_putc_slow(int c, struct buf_out *buf) {
     buf_out_flush(buf);
     *(buf)->next++ = c;

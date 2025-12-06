@@ -356,6 +356,9 @@ static char *execute_subshell_capture(const char *cmd_str) {
     // vfork() shares address space, and child modifying stack/heap can corrupt parent
     pid_t pid = fork();
     if (pid == 0) {
+        buf_out_reset_all(); // Reset buffer in child
+        // Restore default signal handling in child
+        signal_reset_all();
         close(pipefd[0]);
         dup2(pipefd[1], STDOUT_FILENO);
         close(pipefd[1]);

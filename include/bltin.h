@@ -45,15 +45,21 @@
 
 /* Error handling mapping */
 /* FreeBSD sh uses error() for fatal errors (longjmp) and warn() for warnings */
-/* Error handling mapping */
-/* FreeBSD sh uses error() for fatal errors (longjmp) and warn() for warnings */
+
+#include <setjmp.h>
+
+/* Global jump buffer for builtin error recovery */
+extern jmp_buf bltin_jmp;
+extern int bltin_error_status;
+
 static inline void bltin_error(const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
     error_vprintf(fmt, ap);
     va_end(ap);
     error_printf("\n");
-    exit(2); /* FreeBSD test exits with 2 on error */
+    bltin_error_status = 2; /* FreeBSD test exits with 2 on error */
+    longjmp(bltin_jmp, 1);
 }
 
 static inline void bltin_warn(const char *fmt, ...) {

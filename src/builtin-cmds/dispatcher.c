@@ -3,6 +3,11 @@
 #include "builtins.h"
 #include <string.h>
 #include <stdlib.h>
+#include <setjmp.h>
+
+/* Global jump buffer for builtin error recovery (used by bltin.h error()) */
+jmp_buf bltin_jmp;
+int bltin_error_status;
 
 typedef struct {
     const char *name;
@@ -77,8 +82,13 @@ int builtin_is_builtin(const char *name) {
 int builtin_run(char **args) {
     Builtin *entry = bsearch(args[0], builtins, sizeof(builtins) / sizeof(Builtin), sizeof(Builtin), compare_builtins);
     if (entry) {
+        /* Use setjmp to catch errors from builtins (like test's error()) */
+        bltin_error_status = 0;
+        if (setjmp(bltin_jmp) != 0) {
+            /* Returned here via longjmp from bltin_error */
+            return bltin_error_status;
+        }
         return entry->func(args);
     }
     return 127; // Should not happen if checked with builtin_is_builtin
 }
-

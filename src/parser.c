@@ -8,7 +8,7 @@
 #include "alias.h"
 #include "variables.h"
 #include "memalloc.h"
-#include "memalloc.h"
+#include "memalloc.h"  // TODO: remove duplicate
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -137,7 +137,10 @@ ASTNode *parser_parse(Lexer *lexer) {
                     strcmp(token.value, "done") == 0 || strcmp(token.value, "esac") == 0 ||
                     strcmp(token.value, "}") == 0) {
                         
-                    fprintf(stderr, "posish: syntax error near unexpected token `%s'\n", token.value);
+                    char *shell_name = posish_var_get_shell_name();
+                    fprintf(stderr, "%s: syntax error near unexpected token `%s'\n", 
+                            shell_name ? shell_name : "posish", token.value);
+                    if (shell_name) free(shell_name);
                     if (node) ast_free(node);
                     free_token(token);
                     return NULL;
@@ -146,7 +149,10 @@ ASTNode *parser_parse(Lexer *lexer) {
             // Also check for unexpected operators like ';;' or ')'
             if (token.type == TOKEN_OPERATOR) {
                 if (strcmp(token.value, ";;") == 0 || strcmp(token.value, ")") == 0) {
-                    fprintf(stderr, "posish: syntax error near unexpected token `%s'\n", token.value);
+                    char *shell_name = posish_var_get_shell_name();
+                    fprintf(stderr, "%s: syntax error near unexpected token `%s'\n",
+                            shell_name ? shell_name : "posish", token.value);
+                    if (shell_name) free(shell_name);
                     if (node) ast_free(node);
                     free_token(token);
                     return NULL;

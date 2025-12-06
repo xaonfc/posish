@@ -12,6 +12,7 @@
 #include "builtins.h"
 #include "memalloc.h"
 #include "buf_output.h"
+#include "error.h"
 
 static int has_error = 0;
 
@@ -86,19 +87,19 @@ static long parse_int_arg(const char *arg) {
     long val = strtol(arg, &endptr, 0);
     
     if (errno == ERANGE) {
-        fprintf(stderr, "printf: \"%s\" arithmetic overflow\n", arg);
+        error_msg("printf: \"%s\" arithmetic overflow", arg);
         has_error = 1;
         return (errno == ERANGE && val < 0) ? LONG_MIN : LONG_MAX;
     }
     
     if (*endptr != '\0') {
-        fprintf(stderr, "printf: \"%s\" not completely converted\n", arg);
+        error_msg("printf: \"%s\" not completely converted", arg);
         has_error = 1;
     }
     
     if (*arg == '\0' || (*arg != '-' && *arg != '+' && !isdigit((unsigned char)*arg) 
         && *arg != '\'' && *arg != '"' && *arg != '0')) {
-        fprintf(stderr, "printf: \"%s\" expected numeric value\n", arg);
+        error_msg("printf: \"%s\" expected numeric value", arg);
         has_error = 1;
     }
     
@@ -107,7 +108,7 @@ static long parse_int_arg(const char *arg) {
 
 int builtin_printf(char **argv) {
     if (!argv[1]) {
-        fprintf(stderr, "printf: missing format string\n");
+        error_msg("printf: missing format string");
         return 1;
     }
     

@@ -13,6 +13,7 @@
 #include "output.h"
 #include "error.h"
 #include "memalloc.h"
+#include "variables.h"
 
 /* 
  * Compatibility layer for FreeBSD builtins (like test.c)
@@ -53,6 +54,11 @@ extern jmp_buf bltin_jmp;
 extern int bltin_error_status;
 
 static inline void bltin_error(const char *fmt, ...) {
+    /* Print shell name prefix */
+    char *shell_name = posish_var_get_shell_name();
+    error_printf("%s: ", shell_name ? shell_name : "posish");
+    if (shell_name) free(shell_name);
+    
     va_list ap;
     va_start(ap, fmt);
     error_vprintf(fmt, ap);

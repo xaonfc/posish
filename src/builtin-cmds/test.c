@@ -533,7 +533,7 @@ int testcmd(char **argv) {
 		p++;
 	if (strcmp(p, "[") == 0) {
 		if (strcmp(argv[--argc], "]") != 0)
-			error("missing ]");
+			error("[: missing ]");
 		argv[argc] = NULL;
 	}
 

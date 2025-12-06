@@ -1605,7 +1605,7 @@ static int execute_simple_command(ASTNode *node) {
     // External command execution
     char *executable = find_executable(argv[0]);
     if (!executable) {
-        fprintf(stderr, "%s: command not found\n", argv[0]);
+        error_msg("%s: command not found", argv[0]);
         return 127;
     }
 

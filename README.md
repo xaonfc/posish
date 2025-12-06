@@ -30,10 +30,11 @@ The execution engine is optimized for low latency and high throughput.
 
 ## OS Support
 
-posish has been succesfully ported to the following operating systems:
+posish has been succesfully ported and tested to the following operating systems:
 - Linux
 - QNX
 - FreeBSD
+- NetBSD
 
 More ports are in progress.
 

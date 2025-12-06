@@ -65,6 +65,7 @@ Cross-compilation:
   target=<os>    : Build for a specific OS
     target=linux   : Linux (native build)
     target=freebsd : FreeBSD (cross-compile)
+    target=netbsd  : NetBSD (cross-compile)
     target=qnx     : QNX Neutrino (requires QNX SDP)
 
   arch=<arch>    : Cross-compile for a different architecture (Linux)
@@ -114,7 +115,7 @@ case "$1" in
         ;;
     wipeall)
         echo "==> Removing ALL build directories..."
-        rm -rf build_Linux build_FreeBSD build_qnx build_freebsd build_ASAN build_aarch64
+        rm -rf build_Linux build_FreeBSD build_NetBSD build_qnx build_freebsd build_ASAN build_aarch64
         rm -rf obj-*
         # Clean /tmp fallback dirs
         rm -rf /tmp/posish_build_*
@@ -270,9 +271,40 @@ EOF
                 echo "Linux build complete."
                 exit 0
                 ;;
+            netbsd)
+                echo "==> Cross-compiling for NetBSD..."
+
+                if command -v x86_64-unknown-netbsd10.0-gcc >/dev/null 2>&1; then
+                    NETBSD_CC="x86_64-unknown-netbsd10.0-gcc"
+                    NETBSD_AR="x86_64-unknown-netbsd10.0-ar"
+                    NETBSD_STRIP="x86_64-unknown-netbsd10.0-strip"
+                else
+                    need_cmd clang "Install clang or a NetBSD cross-compiler."
+                    NETBSD_CC="clang --target=x86_64-unknown-netbsd10 --sysroot=/usr/netbsd"
+                    NETBSD_AR="llvm-ar"
+                    NETBSD_STRIP="llvm-strip"
+                fi
+
+                echo "Creating netbsd-x86_64.txt cross-file..."
+                cat > netbsd-x86_64.txt <<EOF
+[binaries]
+c = '$NETBSD_CC'
+ar = '$NETBSD_AR'
+strip = '$NETBSD_STRIP'
+
+[host_machine]
+system = 'netbsd'
+cpu_family = 'x86_64'
+cpu = 'x86_64'
+endian = 'little'
+EOF
+                simple_build "build_netbsd" --cross-file netbsd-x86_64.txt
+                echo "NetBSD build complete."
+                exit 0
+                ;;
             *)
                 echo "Error: Unknown target OS '$TARGET'"
-                echo "Available targets: linux, freebsd, qnx"
+                echo "Available targets: linux, freebsd, netbsd, qnx"
                 exit 1
                 ;;
         esac

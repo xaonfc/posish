@@ -214,7 +214,7 @@ int builtin_printf(char **argv) {
                     int p = 0;
                     long_spec[p++] = '%';
                     int s = start + 1;
-                    while (s < fmt_idx - 1) long_spec[p++] = format[s++];
+                    while (s < fmt_idx - 1 && p < 64) long_spec[p++] = format[s++];
                     long_spec[p++] = 'l';
                     long_spec[p++] = conv_char;
                     long_spec[p] = '\0';

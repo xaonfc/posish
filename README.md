@@ -35,6 +35,7 @@ posish has been succesfully ported and tested to the following operating systems
 - QNX
 - FreeBSD
 - NetBSD
+- Haiku
 
 More ports are in progress.
 

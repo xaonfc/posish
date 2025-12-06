@@ -51,3 +51,4 @@ linux-aarch64.txt
 debian/files
 netbsd-x86_64.txt
 freebsd-x86_64.txt
+haiku-*.txt

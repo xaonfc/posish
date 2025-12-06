@@ -100,6 +100,21 @@ void posish_var_init(char **envp) {
     char ppid_buf[32];
     snprintf(ppid_buf, sizeof(ppid_buf), "%d", getppid());
     posish_var_set("PPID", ppid_buf);
+
+    // Sanitize PS1: inherited environments (like Haiku) may have complex
+    // prompts with command substitution (backticks, $()) or multi-line logic
+    // which we don't support yet.
+    if (vps1.value) {
+        int suspicious = 0;
+        if (strchr(vps1.value, '`')) suspicious = 1;         // Backticks
+        if (strstr(vps1.value, "$(")) suspicious = 1;        // Command sub
+        if (strchr(vps1.value, '\n')) suspicious = 1;        // Multi-line
+        
+        if (suspicious) {
+            if (vps1.value) free(vps1.value);
+            vps1.value = xstrdup("\\u@\\h:\\w\\$ ");
+        }
+    }
 }
 
 static struct var *find_var(const char *name) {

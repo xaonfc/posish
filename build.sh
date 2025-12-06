@@ -56,7 +56,7 @@ Usage: $0 [options] [command]
 
 Options:
   target=<os>    : Target OS (default: $HOST_OS)
-                   values: linux, freebsd, netbsd, qnx
+                   values: linux, freebsd, netbsd, haiku, qnx
   arch=<arch>    : Target Architecture (default: $HOST_ARCH)
                    values: x86_64, aarch64, i686, etc.
 

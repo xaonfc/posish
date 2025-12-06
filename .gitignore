@@ -47,7 +47,7 @@ tests/__pycache__
 
 # Cross-compilation (auto-generated)
 qnx-x86_64.txt
-aarch64-linux.txt
+linux-aarch64.txt
 debian/files
 netbsd-x86_64.txt
 freebsd-x86_64.txt
